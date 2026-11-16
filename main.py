@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify, redirect, url_for
+from flask import Flask, render_template_string, request, jsonify, redirect, url_for, make_response
 import requests
 import os
 import re
@@ -54,7 +54,6 @@ FULL_VARIANTS = [
 ]
 
 # 🔥 SPINTAX ŠABLONI (Novi cold-traffic komentari + unaprijeđeni postojeći)
-# Koriste {AUTHOR}, {BOOK}, {FULL} placeholder-e koji se dinamički rotiraju bez ponavljanja u istom batchu!
 SPINTAX_TEMPLATES = [
     # --- NOVI COLD TRAFFIC KOMENTARI (visoki CTR & znatiželja) ---
     r"{it’s|it's|its} {actually|genuinely|lowkey|honestly} {scary|insane|wild} how accurate {AUTHOR} is about relationships… i {can't|cant|cannot} unsee how people operate now{| fr}{| tbh}",
@@ -266,13 +265,13 @@ def convert_to_pc_link(raw_url: str) -> str:
 def parse_delay_to_seconds(raw_val: str) -> int:
     """
     Pretvara unos u sekunde:
-    - '0.15' -> 15 sekundi
-    - '0.45' -> 45 sekundi
+    - '0.15' -> 15 sekundi (default)
+    - '0.30' -> 30 sekundi
     - '1' -> 60 sekundi
     """
     val = (raw_val or "").strip().replace(",", ".")
     if not val:
-        return 25
+        return 15
     try:
         if "." in val:
             parts = val.split(".", 1)
@@ -283,7 +282,7 @@ def parse_delay_to_seconds(raw_val: str) -> int:
             mins = int(val)
             return max(3, mins * 60)
     except ValueError:
-        return 25
+        return 15
 
 
 def format_delay(seconds: int) -> str:
@@ -321,7 +320,7 @@ def send_batch_comments(video_link: str, comments_list: list):
 
 
 def background_worker():
-    """Worker sa pametnim jitterom za smanjenje burst-flaga."""
+    """TURBO Worker sa brzim jitterom (+2 do +7s)."""
     global is_waiting, sent_ok_count, sent_fail_count
 
     while True:
@@ -360,9 +359,9 @@ def background_worker():
 
             if has_more:
                 is_waiting = True
-                jitter = random.randint(3, 11)
+                jitter = random.randint(2, 7)
                 sleep_time = max(3, base_delay + jitter)
-                add_log(f"⏳ Pauza: {format_delay(sleep_time)} do sljedećeg naloga...")
+                add_log(f"⏩ Brza pauza: {format_delay(sleep_time)} do sljedećeg naloga...")
 
                 for _ in range(sleep_time):
                     with queue_lock:
@@ -406,7 +405,7 @@ HTML_TEMPLATE = """
     .btn-primary { background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; box-shadow: 0 10px 25px rgba(239, 68, 68, 0.5); }
     .btn-secondary { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.5); }
     .btn-danger { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.5); }
-    .log, .preview-box { margin-top: 10px; font-size: 12px; font-family: monospace; white-space: pre-wrap; background: rgba(10, 15, 30, 0.9); border-radius: 10px; padding: 12px; border: 1px solid rgba(55,65,81,0.9); max-height: 260px; overflow: auto; }
+    .log, .preview-box { margin-top: 10px; font-size: 12px; font-family: monospace; white-space: pre-wrap; background: rgba(10, 15, 30, 0.9); border-radius: 10px; padding: 12px; border: 1px solid rgba(55,65,81,0.9); max-height: 280px; overflow: auto; }
     .preview-box { display: none; border-color: rgba(99, 102, 241, 0.5); color: #c7d2fe; margin-bottom: 14px; }
   </style>
 </head>
@@ -422,7 +421,7 @@ HTML_TEMPLATE = """
         <div>
           Status:
           <span id="queue-badge" class="badge {% if queue_count > 0 or is_waiting %}badge-active{% else %}badge-idle{% endif %}">
-            {% if queue_count > 0 or is_waiting %}⚡ U TOKU (Radi){% else %}✅ SPREMNO (Red prazan){% endif %}
+            {% if queue_count > 0 or is_waiting %}⚡ U TOKU (Turbo radi){% else %}✅ SPREMNO (Red prazan){% endif %}
           </span>
         </div>
         <div>Preostalo naloga: <b id="queue-count">{{ queue_count }}</b></div>
@@ -435,11 +434,11 @@ HTML_TEMPLATE = """
 
         <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 16px;">
           <div style="flex: 1.3; min-width: 260px;">
-            <label for="send_mode">Režim brzine i anti-flag strategije:</label><br>
+            <label for="send_mode">Režim brzine i slanja:</label><br>
             <select name="send_mode" id="send_mode">
-              <option value="2x5_rounds" selected>🛡️ PREPORUČENO (Anti-Flag): 10 kom u 2 odvojena kruga (2x5 kom)</option>
-              <option value="1x5_round">🚀 BRZO & SIGURNO: 5 komentara po linku (1 order = 5 kom)</option>
-              <option value="10_at_once">🔥 TURBO (Veći rizik): 10 komentara ODJEDNOM po linku</option>
+              <option value="10_at_once" selected>🔥 PREPORUČENO (Turbo): 10 komentara ODJEDNOM po linku (1 order = 10 kom)</option>
+              <option value="2x5_rounds">🛡️ SREDNJE (Anti-Flag): 10 komentara u 2 kruga (2 ordera x 5 kom)</option>
+              <option value="1x5_round">🚀 BRZO: Samo 5 komentara po linku (1 order = 5 kom)</option>
             </select>
 
             <div style="margin-top: 12px;">
@@ -461,19 +460,19 @@ HTML_TEMPLATE = """
 
           <div style="flex: 0.9; min-width: 220px;">
             <label for="delay_minutes">Pauza između naloga (min ili 0.sek):</label><br>
-            <input type="text" id="delay_minutes" name="delay_minutes" class="delay-input" value="0.25" inputmode="decimal" oninput="updateDelayPreview()">
-            <div id="delay-preview" class="live-delay-preview">⏱️ Pauza: 25 sek (+ 3-11s jitter)</div>
+            <input type="text" id="delay_minutes" name="delay_minutes" class="delay-input" value="0.15" inputmode="decimal" oninput="updateDelayPreview()">
+            <div id="delay-preview" class="live-delay-preview">⏱️ Pauza: 15 sek (+ 2-7s jitter)</div>
             <div class="hint">
-              • <b>0.15</b> = 15 sekundi (brzo)<br>
-              • <b>0.25</b> = 25 sekundi (balansirano)<br>
-              • <b>0.45</b> = 45 sekundi (najsigurnije)<br>
+              • <b>0.10</b> = 10 sekundi<br>
+              • <b>0.15</b> = 15 sekundi (default)<br>
+              • <b>0.30</b> = 30 sekundi<br>
               • <b>1</b> = 1 minuta
             </div>
           </div>
         </div>
 
         <div class="btn-row">
-          <button type="submit" name="action" value="add" class="btn-primary">⚡ POKRENI SLANJE</button>
+          <button type="submit" name="action" value="add" class="btn-primary">⚡ POKRENI TURBO SLANJE</button>
           <button type="button" class="btn-secondary" onclick="loadPreview()">👁️ Testiraj 5 komentara</button>
           <button type="submit" name="action" value="clear" class="btn-danger" onclick="return confirm('Sigurno želiš zaustaviti i isprazniti red?');">🛑 Zaustavi i očisti</button>
         </div>
@@ -481,7 +480,10 @@ HTML_TEMPLATE = """
 
       <div id="preview-box" class="preview-box"></div>
 
-      <div style="font-size: 12px; color: #9ca3af; margin-top: 10px;"><b>Live Log:</b></div>
+      <div style="font-size: 12px; color: #9ca3af; margin-top: 10px; display:flex; justify-content:space-between;">
+        <b>Live Log:</b>
+        <span id="last-sync" style="font-size:11px; color:#64748b;"></span>
+      </div>
       <div class="log" id="log-box">{{ log or 'Čekam zadatke...' }}</div>
     </div>
   </div>
@@ -490,7 +492,7 @@ HTML_TEMPLATE = """
     function updateDelayPreview() {
       const raw = (document.getElementById('delay_minutes').value || '').trim().replace(',', '.');
       const preview = document.getElementById('delay-preview');
-      let totalSec = 25;
+      let totalSec = 15;
       if (raw.includes('.')) {
         const parts = raw.split('.');
         const mins = parseInt(parts[0] || '0', 10);
@@ -500,39 +502,50 @@ HTML_TEMPLATE = """
         const mins = parseInt(raw, 10);
         if (!isNaN(mins)) totalSec = Math.max(3, mins * 60);
       }
-      preview.innerText = `⏱️ Pauza: ${totalSec} sek (+ 3-11s jitter)`;
+      preview.textContent = `⏱️ Pauza: ${totalSec} sek (+ 2-7s jitter)`;
     }
 
     async function loadPreview() {
       const mode = document.getElementById('camouflage_mode').value;
       const box = document.getElementById('preview-box');
       try {
-        const res = await fetch(`/preview?mode=${encodeURIComponent(mode)}`);
+        const res = await fetch(`/preview?mode=${encodeURIComponent(mode)}&_=${Date.now()}`, { cache: 'no-store' });
         const data = await res.json();
         box.style.display = 'block';
-        box.innerText = '👁️ Primjer generisanog batcha:\n\n' + data.comments.map((c, i) => `${i+1}. ${c}`).join('\n');
+        box.textContent = '👁️ Primjer generisanog batcha:\n\n' + data.comments.map((c, i) => `${i+1}. ${c}`).join('\n');
       } catch (e) {}
     }
 
-    setInterval(async () => {
+    async function refreshStatus() {
       try {
-        const res = await fetch('/status');
+        const res = await fetch(`/status?_=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) return;
         const data = await res.json();
-        document.getElementById('queue-count').innerText = data.queue_count;
-        document.getElementById('sent-ok').innerText = data.sent_ok;
-        document.getElementById('sent-fail').innerText = data.sent_fail;
-        document.getElementById('log-box').innerText = data.log || 'Čekam zadatke...';
+
+        document.getElementById('queue-count').textContent = data.queue_count;
+        document.getElementById('sent-ok').textContent = data.sent_ok;
+        document.getElementById('sent-fail').textContent = data.sent_fail;
+        document.getElementById('log-box').textContent = data.log || 'Čekam zadatke...';
+        document.getElementById('last-sync').textContent = 'Live sync: ' + new Date().toLocaleTimeString();
 
         const badge = document.getElementById('queue-badge');
         if (data.queue_count > 0 || data.is_waiting) {
           badge.className = 'badge badge-active';
-          badge.innerText = '⚡ U TOKU (Radi)';
+          badge.textContent = '⚡ U TOKU (Turbo radi)';
         } else {
           badge.className = 'badge badge-idle';
-          badge.innerText = '✅ SPREMNO (Red prazan)';
+          badge.textContent = '✅ SPREMNO (Red prazan)';
         }
-      } catch (e) {}
-    }, 1500);
+      } catch (e) {
+      } finally {
+        setTimeout(refreshStatus, 1000);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      updateDelayPreview();
+      refreshStatus();
+    });
   </script>
 </body>
 </html>
@@ -552,8 +565,8 @@ def index():
 
         elif action == "add":
             raw_links = request.form.get("input_links", "")
-            raw_delay = request.form.get("delay_minutes", "0.25")
-            send_mode = request.form.get("send_mode", "2x5_rounds")
+            raw_delay = request.form.get("delay_minutes", "0.15")
+            send_mode = request.form.get("send_mode", "10_at_once")
             camouflage_mode = request.form.get("camouflage_mode", "safe")
             shuffle_links = request.form.get("shuffle_links") == "1"
 
@@ -581,7 +594,6 @@ def index():
                             "delay": delay_seconds,
                         })
                 else:
-                    # 2 kruga po 5 (razdvojeno po krugovima tako da isti video ne dobije 10 kom u istoj sekundi)
                     for r_idx in range(2):
                         round_links = list(links)
                         if r_idx == 1 and len(round_links) > 1:
@@ -596,8 +608,8 @@ def index():
 
             if links:
                 add_log(
-                    f"⚡ START: Ubačeno {len(links)} linkova "
-                    f"(Mod: {send_mode}, Pauza: {delay_seconds}s, Kamuflaža: {camouflage_mode})."
+                    f"⚡ TURBO START: Ubačeno {len(links)} linkova "
+                    f"(Mod: {send_mode}, Pauza: {delay_seconds}s + 2-7s jitter, Kamuflaža: {camouflage_mode})."
                 )
             return redirect(url_for("index"))
 
@@ -621,19 +633,24 @@ def index():
 @app.route("/preview")
 def preview():
     mode = request.args.get("mode", "safe")
-    return jsonify({"comments": generate_unique_batch(5, mode)})
+    resp = make_response(jsonify({"comments": generate_unique_batch(5, mode)}))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return resp
 
 
 @app.route("/status")
 def status():
     with queue_lock:
-        return jsonify({
+        resp = make_response(jsonify({
             "queue_count": len(order_queue),
             "sent_ok": sent_ok_count,
             "sent_fail": sent_fail_count,
             "is_waiting": is_waiting,
             "log": "\n".join(log_lines),
-        })
+        }))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 if __name__ == "__main__":
