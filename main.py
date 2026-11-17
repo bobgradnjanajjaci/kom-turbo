@@ -15,81 +15,93 @@ PANEL_URL = os.environ.get("SMMFROG_PANEL_URL", "https://smmfrog.com/api/v2")
 API_KEY = os.environ.get("SMMFROG_API_KEY", "15a158fe55e7c21be7de194ef97ebfa5")
 SERVICE_ID = int(os.environ.get("SMMFROG_SERVICE_ID", "4120"))  # TikTok Custom Comments na SMMFrog (Min: 5)
 
-# 🎯 VARIJACIJE KLJUČNIH RIJEČI (Prirodne greške + razdvajanje da se izbjegne keyword flag)
-AUTHOR_VARIANTS = [
-    "Nora Alversett",
-    "nora alversett",
-    "Nora Alverset",
-    "Norra Alversett",
-    "N. Alversett",
-    "Nora.Alversett",
-    "Nora Alversette",
-    "Nora Alversettt",
-    "Nora A.",
+# 🎯 TAČNA IMENA (BEZ ružnih tipfelera poput "Alversette Efecte" — 100% čitljivo i pretraživo)
+FULL_VARIANTS = [
+    "The Alversett Effect by Nora Alversett",
+    "the alversett effect by nora alversett",
+    "The Alversett Effect - Nora Alversett",
+    "The Alversett Effect — Nora Alversett",
+    "Alversett Effect by Nora Alversett",
+    "the alversett effect, nora alversett",
+    "The Alversett Effect by N. Alversett",
+    "the alversett effect by n. alversett",
 ]
 
 BOOK_VARIANTS = [
     "The Alversett Effect",
     "the alversett effect",
-    "The Alverset Effect",
-    "The Alversett Efect",
-    "The Alversett Effectt",
     "Alversett Effect",
     "alversett effect",
-    "Alverset Effect",
-    "The Alversette Effect",
 ]
 
-FULL_VARIANTS = [
-    "The Alversett Effect by Nora Alversett",
-    "the alversett effect by nora alversett",
-    "The Alverset Effect by Nora Alversett",
-    "The Alversett Efect by Nora Alversett",
-    "The Alversett Effect by N. Alversett",
-    "Alversett Effect by Nora Alversett",
-    "The Alversett Effect - Nora Alversett",
-    "the alversett effect, nora alversett",
-    "Alversett Effect by Nora Alverset",
-    "The Alversett Effectt by Norra Alversett",
+AUTHOR_VARIANTS = [
+    "Nora Alversett",
+    "nora alversett",
+    "N. Alversett",
 ]
 
-# 🔥 SPINTAX ŠABLONI (Novi cold-traffic komentari + unaprijeđeni postojeći)
+# 👻 NEVIDLJIVI KARAKTERI (Zero-Width Unicode)
+# Ljudskom oku su 100% nevidljivi (ime izgleda potpuno tačno: "The Alversett Effect"),
+# ali za TikTokov anti-spam filter svaki komentar ima drugačiji string/hash!
+ZW_CHARS = [
+    "\u200b",  # Zero-Width Space (ZWSP)
+    "\u200c",  # Zero-Width Non-Joiner (ZWNJ)
+    "\u200d",  # Zero-Width Joiner (ZWJ)
+    "\u2060",  # Word Joiner (WJ)
+]
+
+# 🔥 45 SPINTAX ŠABLONA (Svaki komentar jasno sadrži {FULL} ili {BOOK} + {AUTHOR} ili samo {BOOK})
 SPINTAX_TEMPLATES = [
-    # --- NOVI COLD TRAFFIC KOMENTARI (visoki CTR & znatiželja) ---
-    r"{it’s|it's|its} {actually|genuinely|lowkey|honestly} {scary|insane|wild} how accurate {AUTHOR} is about relationships… i {can't|cant|cannot} unsee how people operate now{| fr}{| tbh}",
-    r"reading {BOOK} felt {illegal|unreal|like a cheat code}. everything i thought i knew about attachment and manifesting was {backwards|completely wrong|a lie}{| ngl}{| tbh}",
-    r"{AUTHOR} exposed the exact psychology behind why people pull away and now every interaction makes {total |complete |}sense{| fr}{| ngl}",
-    r"once {you|u} understand {BOOK} {you|u} {literally|genuinely|actually} stop chasing anyone. the shift in how people treat {you|u} is {unreal|insane|wild}{| tbh}",
-    r"i wish i found {AUTHOR} before my last situationship, would've saved me {months|years} of overthinking{| fr}{| ngl}",
+    # --- TVOJI NOVI KOMENTARI (Set 1: Autor + Knjiga odvojeno u rečenici) ---
+    r"now i {finally |actually |}understand why {AUTHOR} {completely |literally |}wiped her digital footprint after {publishing|releasing|dropping} {BOOK}{| tbh}{| fr}",
+    r"{no therapist or dating coach|literally no dating coach|no relationship coach} ever {explained|broke down} silent manipulation the way {AUTHOR} did in {BOOK}, page {13|78} is {terrifying|honestly scary|unreal}{| ngl}",
+    r"a girl in another comment section {mentioned|put me onto|recommended} {AUTHOR} and after finishing {BOOK} i {finally |completely |}see why she stays anonymous{| tbh}{| ngl}",
+    r"{still |honestly |}crazy to me how {AUTHOR} dropped {BOOK}, ruined everyone's delusions about relationships, and {vanished|disappeared} without a trace{| fr}{| ngl}",
+    r"whoever put me onto {AUTHOR} and her book {BOOK} last week thank {you|u} {so much |}bc my overthinking is {literally |completely |honestly |}gone{| fr}{| ngl}",
+    r"the way {AUTHOR} breaks down attention dynamics in chapter 4 of {BOOK} makes {you|u} never {wanna|want to} chase anyone again{| tbh}{| fr}",
+    r"i {totally |finally |}get why {AUTHOR} went {completely |}ghost after {releasing|dropping} {BOOK}, people {aren't|arent} ready for page {24|114} tbh",
+    r"{AUTHOR} {really |literally |}wrote less than 200 pages in {BOOK} and exposed every toxic relationship pattern in existence{| fr}{| ngl}",
+    r"once {you|u} do the 17 questions {AUTHOR} put inside {BOOK} {you|u} realize how much {power|energy} {you|u} were giving away for crumbs{| tbh}{| ngl}",
+    r"is {AUTHOR} a real psychologist or what bc {BOOK} reads people's minds in a way that is {genuinely |honestly |}{scary|insane|wild}{| ngl}{| fr}",
 
-    # --- NOVE VARIJACIJE NA ISTU TEMU (kombinacija knjige, autora i efekta znatiželje) ---
-    r"{AUTHOR} broke down attachment and silent pulling away so accurately in {BOOK} that it {genuinely|actually|lowkey} gave me chills{| ngl}{| tbh}",
-    r"everything {you|u} were told about chasing and manifesting is backwards compared to what {BOOK} explains, {no wonder|that's why} {AUTHOR} went ghost{| fr}",
-    r"after reading {BOOK} i {literally|finally} see why people pull away right when things get good… {AUTHOR} {exposed|decoded} the whole pattern{| tbh}{| ngl}",
-    r"i thought i was just anxious until {AUTHOR} explained attention dynamics in {BOOK}, now i {cannot|can't} unsee how people move{| fr}",
-    r"if {you're|youre|u are} still overthinking someone pulling away, read {BOOK} once and watch how fast your mindset shifts{| tbh}{| ngl}",
-
-    # --- NAJBOLJI POSTOJEĆI ŠABLONI (pročišćeni i razdvojeni za manji keyword footprint) ---
-    r"{not me reading|honestly not me finishing|literally me reading} {FULL} in {one sitting|a single night|one go} and {finally |actually |}understanding why {she|the author} {completely |literally |}wiped her digital footprint after {publishing|dropping|releasing} it{| tbh}{| ngl}",
-    r"{no therapist or dating coach|literally no dating coach|no relationship coach} ever {explained|broke down} silent mind games the way {BOOK} did, once {you|u} read page {78|13} {you|u} can {never|literally never} look at relationships the same way again{| fr}{| tbh}",
-    r"a girl in another comment section {mentioned|put me onto|recommended} {FULL} and now i {see|get|understand} why the author {stays anonymous|never shows her face}, page {114|24} is {honestly |genuinely |}not normal{| ngl}",
-    r"i {used to|literally used to} overthink {everything|every little thing} and always give {too|to} much until {someone put me onto|i read|i found} {BOOK}, it {genuinely |honestly |really |}feels like having an unfair advantage in reading people{| tbh}",
-    r"once {you|u} read chapter 4 of {BOOK} and see how attention dynamics {actually |really |}work, {you|u} never {wanna|want to} chase anyone or settle for crumbs again{| fr}{| ngl}",
-    r"doing the 17 questions inside {BOOK} made me {realize|see} how much {power|energy} i was giving away to people who {didn't|didnt} even deserve my attention{| tbh}{| honestly}",
-    r"men are {honestly |genuinely |lowkey |}lucky most women still {haven't|havent} {discovered|found|read} {BOOK} {because|bc} chapter 3 alone {ruins all their delusions|changes the whole dynamic} overnight{| fr}",
+    # --- TVOJI NOVI KOMENTARI (Set 2: Puni naziv "{FULL}" = The Alversett Effect by Nora Alversett) ---
+    r"{not me reading|honestly not me finishing|literally me reading} {FULL} in {one sitting|a single night|one go} and {finally |actually |}understanding why the author {completely |literally |}disappeared from the internet after {publishing|releasing|dropping} it{| tbh}{| ngl}",
+    r"i {almost |lowkey |}wish i never read {FULL} {because|bc} once {you|u} see what she explains on page {13|78} {you|u} can {never|literally never} look at relationships the same way again{| fr}{| tbh}",
+    r"a girl in another comment section {mentioned|recommended} {FULL} and now i {see|understand|get} why the author never shows her face in public anymore, page {24|114} is {honestly |genuinely |}not normal{| ngl}",
+    r"i {used to|literally used to} overthink {everything|every little thing} and always give too much until i read {FULL}, it {genuinely |honestly |really |}feels like having an unfair advantage in reading people{| tbh}",
+    r"no influencer or coach ever {explained|exposed} human behavior the way {AUTHOR} did in {BOOK}, i {finally |completely |}get why she went {completely |}offline after releasing this book{| tbh}{| fr}",
+    r"once {you|u} read chapter 4 of {FULL} and see how easily women are conditioned to settle for less, {you|u} can {never|literally never} unsee it{| fr}{| ngl}",
     r"i know it sounds {dramatic|crazy|wild} to talk about a book in the comments, but {FULL} flipped a switch in my brain that i {honestly |genuinely |literally |}cannot turn off{| ngl}{| tbh}",
+    r"doing the 17 questions from {FULL} made me {realize|see} how much {power|energy} i was giving away to people who {didn't|didnt} even deserve my attention{| tbh}{| fr}",
+    r"men are {honestly |genuinely |lowkey |}lucky most women still {haven't|havent} {discovered|found|read} {FULL} {because|bc} chapter 3 alone {changes the whole dynamic|ruins all their delusions} overnight{| fr}",
+    r"sometimes a {random |}comment about a book finds {you|u} at the exact moment {you|u} need it, and for me it was {FULL}, still {crazy|wild} how the author just vanished after writing it{| tbh}{| ngl}",
+
+    # --- NAJBOLJI KOMENTARI IZ PRVE SKRIPTE + NOVE PRIRODNE VARIJACIJE U ISTOM STILU ---
     r"{still |honestly |}crazy to me how {AUTHOR} packed over 200 pages of {pure |raw |}psychology into {BOOK}, broke down every messy relationship pattern, and {vanished|disappeared} without a trace{| fr}",
     r"sometimes a {random |}comment about a book finds {you|u} at the exact moment {you|u} need it, and for me it was {FULL}, people {really |honestly |}{aren't|arent} ready for page 184{| tbh}{| ngl}",
-    r"now i {finally |actually |}understand why {AUTHOR} {completely |literally |}disappeared from the internet after {publishing|releasing|dropping} {BOOK}{| tbh}{| fr}",
-    r"i {almost |lowkey |}wish i never read {BOOK} {because|bc} once {you|u} see what {AUTHOR} explains on page {78|13} {you|u} can {never|literally never} unsee it{| ngl}",
-    r"no influencer or coach ever {explained|exposed} human behavior the way {AUTHOR} did in {BOOK}, i {finally |completely |}get why she went offline after releasing it{| tbh}",
-    r"whoever put me onto {FULL} last week thank {you|u} {so|soo} much {because|bc} my overthinking is {literally |honestly |completely |}gone{| fr}{| ngl}",
-    r"is {AUTHOR} a real psychologist or what {because|bc} {BOOK} reads people's minds across 200+ pages in a way that is {genuinely |honestly |}{scary|insane|wild}{| ngl}",
-    r"i {totally |finally |}get why the author went {completely |}ghost after {releasing|dropping} {BOOK}, page 114 and page 184 called me out {so|soo} badly{| tbh}{| fr}",
-    r"once {you|u} do the 17 questions inside {BOOK} {you|u} realize how much {energy|time} {you|u} were wasting on people giving {you|u} crumbs{| ngl}{| tbh}",
-    r"the way {BOOK} breaks down attention dynamics in chapter 3 and 4 makes {you|u} never {wanna|want to} chase anyone again{| tbh}{| ngl}",
-    r"reading {BOOK} {genuinely |honestly |really |}feels like having an unfair advantage in reading people, chapter 4 is {crazy|wild|unreal}{| ngl}",
+    r"once {you|u} read chapter 4 of {FULL} and see how attention dynamics {actually |really |}work, {you|u} never {wanna|want to} chase anyone or settle for crumbs again{| fr}{| ngl}",
+    r"i {totally |finally |}get why the author went {completely |}ghost after {releasing|dropping} {FULL}, page 114 and page 184 called me out {so|soo} badly{| tbh}{| fr}",
+    r"{still |honestly |}{crazy|wild|insane} how she dropped {FULL}, exposed every silent mind game in modern dating, and {vanished|disappeared} without a trace{| fr}",
+    r"the way {FULL} breaks down attention dynamics in chapter 3 and 4 makes {you|u} never {wanna|want to} chase anyone again{| tbh}{| ngl}",
+    r"a girl in another comment section mentioned {FULL} and after finishing it in {one sitting|a single day} i see why she never shows her face in public{| fr}{| tbh}",
+    r"reading {FULL} {genuinely |honestly |really |}feels like having an unfair advantage in reading people, chapter 4 is {crazy|wild|unreal}{| ngl}",
+    r"no dating coach ever broke down silent mind games like {FULL} did on page {78|24|13}, it flipped a switch in my brain i {cannot|can't} turn off{| tbh}",
+    r"she {really |literally |}wrote over 200 pages in {FULL}, ruined everyone's delusions about relationships, and {completely |}wiped her digital footprint{| fr}{| ngl}",
+    r"men are {honestly |lowkey |}lucky most women still {haven't|havent} found {FULL} {because|bc} those 17 questions alone wake {you|u} up {immediately|instantly}{| tbh}",
+    r"sometimes a random comment puts {you|u} onto a book at the exact moment {you|u} need it, {FULL} {completely |literally |}cured my overthinking{| fr}{| ngl}",
+    r"i {finally |actually |}get why she went {completely |}offline after dropping {FULL}, people {aren't|arent} ready for the truth on page {114|13|24}{| tbh}",
+    r"doing the 17 questions from {FULL} made me realize how conditioned we are to settle for crumbs of attention{| ngl}{| fr}",
+    r"i {almost |lowkey |}wish i {didn't|didnt} read {FULL} {because|bc} now i spot every messy relationship pattern before it even starts{| tbh}",
     r"whoever recommended {FULL} in the comments last week deserves {everything|the world}, page 184 {literally |genuinely |}changed my life{| fr}{| ngl}",
+    r"i {honestly |genuinely |}thought i had anxious attachment until i read {FULL} and realized i was just reacting to silent manipulation{| tbh}{| ngl}",
+    r"the way {AUTHOR} explains why people pull away right when things get good inside {BOOK} {literally |completely |}rewired my brain overnight{| fr}{| tbh}",
+    r"if {you're|youre} tired of overthinking mixed signals, read {FULL} once and {you'll|you will} never look at dating the same way again{| ngl}{| tbh}",
+    r"nobody talks about how {AUTHOR} dropped {BOOK}, exposed the exact psychology of why men pull away, and then {completely |}disappeared from the internet{| fr}",
+    r"page 13 and page 24 of {FULL} {honestly |literally |}felt like a personal attack, i finally see why everyone in the comments talks about this book{| tbh}{| ngl}",
+    r"i used to blame myself whenever someone pulled away until {FULL} broke down the exact attention trap they use{| fr}{| tbh}",
+    r"listening to the audio version of {BOOK} by {AUTHOR} on my morning walks {literally |honestly |}snapped me out of my delusions so fast{| tbh}{| ngl}",
+    r"after reading chapter 3 and 4 of {BOOK} by {AUTHOR}, i {genuinely |honestly |}can't even get mad anymore because i see the exact pattern playing out{| fr}",
+    r"i saw {FULL} mentioned in three different comment sections this week, finally read it last night, and now i understand why the author stays hidden{| tbh}{| ngl}",
 ]
 
 # 🕒 GLOBALNO STANJE
@@ -111,46 +123,55 @@ DESKTOP_HEADERS = {
 }
 
 
-def apply_keyword_camouflage(text: str, mode: str = "safe") -> str:
+def inject_invisible_chars(word: str) -> str:
     """
-    Pametna kamuflaža za zaobilaženje TikTokovog keyword flaga:
-    - 'safe': samo prirodni tipfeleri, tačkice i varijacije (najmanji rizik od Unicode/mixed-script filtera).
-    - 'mixed': kombinuje prirodne tipfelere + blage homoglife (ćirilično 'е'/'а') u manjem procentu.
-    - 'off': bez dodatne izmjene ključne riječi.
+    Ubacuje 1 ili 2 potpuno nevidljiva Zero-Width karaktera unutar riječi
+    (npr. 'Alversett' -> 'Alv\u200bersett').
+    Za čitaoca na TikToku riječ izgleda 100% normalno i tačno, a za TikTok
+    anti-spam filter to više nije ista zabranjena/flagovana riječ!
+    """
+    if len(word) < 4:
+        return word
+    positions = sorted(random.sample(range(1, len(word)), k=random.choice([1, 2])), reverse=True)
+    chars = list(word)
+    for pos in positions:
+        chars.insert(pos, random.choice(ZW_CHARS))
+    return "".join(chars)
+
+
+def apply_keyword_camouflage(text: str, mode: str = "invisible") -> str:
+    """
+    Zaštita ključnih riječi BEZ kvarenja spelovanja:
+    - 'invisible' (DEFAULT): ubacuje nevidljive Zero-Width znakove u 'Alversett', 'Nora' i 'Effect'.
+                             Ime ostaje 100% vizuelno tačno da ga ljudi lako guglaju!
+    - 'invisible_homoglyph': kombinuje nevidljive znakove + vizuelno identično ćirilično 'е'/'а'.
+    - 'off': potpuno čist tekst bez ikakvih izmjena.
     """
     if mode == "off":
         return text
 
-    if mode == "safe":
-        trick = random.choice(["dot_split", "capital_i", "double_t", "drop_t", "clean", "clean"])
-        if trick == "dot_split":
-            text = re.sub(r"(?i)alversett", "Alver.sett", text, count=1)
-        elif trick == "capital_i":
-            text = re.sub(r"(?i)alversett", "AIversett", text, count=1)
-        elif trick == "double_t":
-            text = re.sub(r"(?i)alversett\b", "Alversettt", text, count=1)
-        elif trick == "drop_t":
-            text = re.sub(r"(?i)alversett\b", "Alverset", text, count=1)
+    if mode == "invisible":
+        text = re.sub(r"(?i)alversett", lambda m: inject_invisible_chars(m.group(0)), text)
+        text = re.sub(r"(?i)effect", lambda m: inject_invisible_chars(m.group(0)), text)
+        text = re.sub(r"(?i)nora", lambda m: inject_invisible_chars(m.group(0)), text)
         return text
 
-    # 'mixed' mode
-    trick = random.choice(["homoglyph_e", "homoglyph_a", "capital_i", "dot_split", "double_t", "clean"])
-    if trick == "homoglyph_e":
-        text = re.sub(r"(?i)alversett", lambda m: m.group(0).replace("e", "е", 1), text, count=1)
-    elif trick == "homoglyph_a":
-        text = re.sub(r"Alversett", "Аlversett", text, count=1)
-        text = re.sub(r"alversett", "аlversett", text, count=1)
-    elif trick == "capital_i":
-        text = re.sub(r"(?i)alversett", "AIversett", text, count=1)
-    elif trick == "dot_split":
-        text = re.sub(r"(?i)alversett", "Alver.sett", text, count=1)
-    elif trick == "double_t":
-        text = re.sub(r"(?i)alversett\b", "Alversettt", text, count=1)
+    if mode == "invisible_homoglyph":
+        trick = random.choice(["zw_only", "zw_plus_e", "zw_plus_a"])
+        if trick == "zw_plus_e":
+            text = re.sub(r"(?i)alversett", lambda m: m.group(0).replace("e", "е", 1), text, count=1)
+        elif trick == "zw_plus_a":
+            text = re.sub(r"Alversett", "Аlversett", text, count=1)
+            text = re.sub(r"alversett", "аlversett", text, count=1)
+        text = re.sub(r"(?i)alversett", lambda m: inject_invisible_chars(m.group(0)), text)
+        text = re.sub(r"(?i)effect", lambda m: inject_invisible_chars(m.group(0)), text)
+        return text
+
     return text
 
 
-def spin_text(template: str, camouflage_mode: str = "safe", author_kw: str = None, book_kw: str = None, full_kw: str = None) -> str:
-    """Raspakuje Spintax, ubacuje rotirane varijante ključnih riječi i primjenjuje kamuflažu."""
+def spin_text(template: str, camouflage_mode: str = "invisible", author_kw: str = None, book_kw: str = None, full_kw: str = None) -> str:
+    """Raspakuje Spintax, ubacuje tačan naziv knjige/autora i primjenjuje nevidljivu zaštitu."""
     text = template
     text = text.replace("{AUTHOR}", author_kw or random.choice(AUTHOR_VARIANTS))
     text = text.replace("{BOOK}", book_kw or random.choice(BOOK_VARIANTS))
@@ -167,11 +188,8 @@ def spin_text(template: str, camouflage_mode: str = "safe", author_kw: str = Non
     return result
 
 
-def generate_unique_batch(count: int = 10, camouflage_mode: str = "safe") -> list:
-    """
-    Generiše batch komentara bez duplih šablona i bez ponavljanja istih varijanti
-    ključnih riječi unutar istog batcha.
-    """
+def generate_unique_batch(count: int = 10, camouflage_mode: str = "invisible") -> list:
+    """Generiše batch komentara bez duplih šablona unutar istog slanja."""
     chosen_templates = random.sample(SPINTAX_TEMPLATES, k=min(count, len(SPINTAX_TEMPLATES)))
 
     authors = random.sample(AUTHOR_VARIANTS, k=len(AUTHOR_VARIANTS))
@@ -380,7 +398,7 @@ HTML_TEMPLATE = """
 <!doctype html>
 <html>
 <head>
-  <title>⚡ TURBO TikTok Spintax Sender v2 — SMMFrog</title>
+  <title>⚡ TURBO TikTok Spintax Sender — SMMFrog</title>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
@@ -412,9 +430,9 @@ HTML_TEMPLATE = """
 <body>
   <div class="container">
     <div class="card">
-      <h1>⚡ TURBO TikTok Spintax + Anti-Flag Sender v2</h1>
+      <h1>⚡ TURBO TikTok Spintax + Invisible Anti-Flag Sender</h1>
       <div class="subtitle">
-        Kombinatorni Spintax • Rotacija ključnih riječi bez ponavljanja u batchu • Prirodna anti-spam zaštita
+        45 šablona (100% tačan naziv knjige i autora) • Nevidljivi Zero-Width karakteri protiv TikTok flagovanja
       </div>
 
       <div class="status-banner">
@@ -442,11 +460,11 @@ HTML_TEMPLATE = """
             </select>
 
             <div style="margin-top: 12px;">
-              <label for="camouflage_mode">Kamuflaža ključne riječi ("Alversett"):</label><br>
+              <label for="camouflage_mode">Zaštita ključne riječi ("The Alversett Effect / Nora Alversett"):</label><br>
               <select name="camouflage_mode" id="camouflage_mode">
-                <option value="safe" selected>🛡️ Safe (Prirodni tipfeleri + tačkice — bez ćirilice)</option>
-                <option value="mixed">🎭 Mixed (Tipfeleri + blagi homoglifi)</option>
-                <option value="off">⚪ Isključeno (samo rotacija varijanti iz liste)</option>
+                <option value="invisible" selected>👻 Invisible Characters (100% tačno ime za čitaoce + nevidljivi Zero-Width znakovi)</option>
+                <option value="invisible_homoglyph">🎭 Invisible + Homoglifi (Nevidljivi znakovi + vizuelno identična slova)</option>
+                <option value="off">⚪ Isključeno (Potpuno običan tekst)</option>
               </select>
             </div>
 
@@ -512,7 +530,7 @@ HTML_TEMPLATE = """
         const res = await fetch(`/preview?mode=${encodeURIComponent(mode)}&_=${Date.now()}`, { cache: 'no-store' });
         const data = await res.json();
         box.style.display = 'block';
-        box.textContent = '👁️ Primjer generisanog batcha:\n\n' + data.comments.map((c, i) => `${i+1}. ${c}`).join('\n');
+        box.textContent = '👁️ Primjer generisanog batcha (sa nevidljivim znakovima):\n\n' + data.comments.map((c, i) => `${i+1}. ${c}`).join('\n');
       } catch (e) {}
     }
 
@@ -567,7 +585,7 @@ def index():
             raw_links = request.form.get("input_links", "")
             raw_delay = request.form.get("delay_minutes", "0.15")
             send_mode = request.form.get("send_mode", "10_at_once")
-            camouflage_mode = request.form.get("camouflage_mode", "safe")
+            camouflage_mode = request.form.get("camouflage_mode", "invisible")
             shuffle_links = request.form.get("shuffle_links") == "1"
 
             delay_seconds = parse_delay_to_seconds(raw_delay)
@@ -632,7 +650,7 @@ def index():
 
 @app.route("/preview")
 def preview():
-    mode = request.args.get("mode", "safe")
+    mode = request.args.get("mode", "invisible")
     resp = make_response(jsonify({"comments": generate_unique_batch(5, mode)}))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return resp
