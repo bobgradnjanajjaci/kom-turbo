@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify, redirect, url_for, make_response
+from flask import Flask, render_template_string, request, jsonify, redirect, url_for
 import requests
 import os
 import re
@@ -10,98 +10,43 @@ from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-# 🔧 KONFIGURACIJA (čita iz env varijable za Railway, sa fallbackom za lokalno)
-PANEL_URL = os.environ.get("SMMFROG_PANEL_URL", "https://smmfrog.com/api/v2")
-API_KEY = os.environ.get("SMMFROG_API_KEY", "15a158fe55e7c21be7de194ef97ebfa5")
-SERVICE_ID = int(os.environ.get("SMMFROG_SERVICE_ID", "4120"))  # TikTok Custom Comments na SMMFrog (Min: 5)
+# 🔧 KONFIGURACIJA
+PANEL_URL = "https://smmfrog.com/api/v2"
+API_KEY = "15a158fe55e7c21be7de194ef97ebfa5"
+SERVICE_ID = 4120  # TikTok Custom Comments na SMMFrog (Min: 5)
 
-# 🎯 TAČNA IMENA (BEZ ružnih tipfelera poput "Alversette Efecte" — 100% čitljivo i pretraživo)
-FULL_VARIANTS = [
-    "The Alversett Effect by Nora Alversett",
-    "the alversett effect by nora alversett",
-    "The Alversett Effect - Nora Alversett",
-    "The Alversett Effect — Nora Alversett",
-    "Alversett Effect by Nora Alversett",
-    "the alversett effect, nora alversett",
-    "The Alversett Effect by N. Alversett",
-    "the alversett effect by n. alversett",
-]
-
-BOOK_VARIANTS = [
-    "The Alversett Effect",
-    "the alversett effect",
-    "Alversett Effect",
-    "alversett effect",
-]
-
-AUTHOR_VARIANTS = [
-    "Nora Alversett",
-    "nora alversett",
-    "N. Alversett",
-]
-
-# 👻 NEVIDLJIVI KARAKTERI (Zero-Width Unicode)
-# Ljudskom oku su 100% nevidljivi (ime izgleda potpuno tačno: "The Alversett Effect"),
-# ali za TikTokov anti-spam filter svaki komentar ima drugačiji string/hash!
-ZW_CHARS = [
-    "\u200b",  # Zero-Width Space (ZWSP)
-    "\u200c",  # Zero-Width Non-Joiner (ZWNJ)
-    "\u200d",  # Zero-Width Joiner (ZWJ)
-    "\u2060",  # Word Joiner (WJ)
-]
-
-# 🔥 45 SPINTAX ŠABLONA (Svaki komentar jasno sadrži {FULL} ili {BOOK} + {AUTHOR} ili samo {BOOK})
+# 🔁 30 SPINTAX ŠABLONA
 SPINTAX_TEMPLATES = [
-    # --- TVOJI NOVI KOMENTARI (Set 1: Autor + Knjiga odvojeno u rečenici) ---
-    r"now i {finally |actually |}understand why {AUTHOR} {completely |literally |}wiped her digital footprint after {publishing|releasing|dropping} {BOOK}{| tbh}{| fr}",
-    r"{no therapist or dating coach|literally no dating coach|no relationship coach} ever {explained|broke down} silent manipulation the way {AUTHOR} did in {BOOK}, page {13|78} is {terrifying|honestly scary|unreal}{| ngl}",
-    r"a girl in another comment section {mentioned|put me onto|recommended} {AUTHOR} and after finishing {BOOK} i {finally |completely |}see why she stays anonymous{| tbh}{| ngl}",
-    r"{still |honestly |}crazy to me how {AUTHOR} dropped {BOOK}, ruined everyone's delusions about relationships, and {vanished|disappeared} without a trace{| fr}{| ngl}",
-    r"whoever put me onto {AUTHOR} and her book {BOOK} last week thank {you|u} {so much |}bc my overthinking is {literally |completely |honestly |}gone{| fr}{| ngl}",
-    r"the way {AUTHOR} breaks down attention dynamics in chapter 4 of {BOOK} makes {you|u} never {wanna|want to} chase anyone again{| tbh}{| fr}",
-    r"i {totally |finally |}get why {AUTHOR} went {completely |}ghost after {releasing|dropping} {BOOK}, people {aren't|arent} ready for page {24|114} tbh",
-    r"{AUTHOR} {really |literally |}wrote less than 200 pages in {BOOK} and exposed every toxic relationship pattern in existence{| fr}{| ngl}",
-    r"once {you|u} do the 17 questions {AUTHOR} put inside {BOOK} {you|u} realize how much {power|energy} {you|u} were giving away for crumbs{| tbh}{| ngl}",
-    r"is {AUTHOR} a real psychologist or what bc {BOOK} reads people's minds in a way that is {genuinely |honestly |}{scary|insane|wild}{| ngl}{| fr}",
-
-    # --- TVOJI NOVI KOMENTARI (Set 2: Puni naziv "{FULL}" = The Alversett Effect by Nora Alversett) ---
-    r"{not me reading|honestly not me finishing|literally me reading} {FULL} in {one sitting|a single night|one go} and {finally |actually |}understanding why the author {completely |literally |}disappeared from the internet after {publishing|releasing|dropping} it{| tbh}{| ngl}",
-    r"i {almost |lowkey |}wish i never read {FULL} {because|bc} once {you|u} see what she explains on page {13|78} {you|u} can {never|literally never} look at relationships the same way again{| fr}{| tbh}",
-    r"a girl in another comment section {mentioned|recommended} {FULL} and now i {see|understand|get} why the author never shows her face in public anymore, page {24|114} is {honestly |genuinely |}not normal{| ngl}",
-    r"i {used to|literally used to} overthink {everything|every little thing} and always give too much until i read {FULL}, it {genuinely |honestly |really |}feels like having an unfair advantage in reading people{| tbh}",
-    r"no influencer or coach ever {explained|exposed} human behavior the way {AUTHOR} did in {BOOK}, i {finally |completely |}get why she went {completely |}offline after releasing this book{| tbh}{| fr}",
-    r"once {you|u} read chapter 4 of {FULL} and see how easily women are conditioned to settle for less, {you|u} can {never|literally never} unsee it{| fr}{| ngl}",
-    r"i know it sounds {dramatic|crazy|wild} to talk about a book in the comments, but {FULL} flipped a switch in my brain that i {honestly |genuinely |literally |}cannot turn off{| ngl}{| tbh}",
-    r"doing the 17 questions from {FULL} made me {realize|see} how much {power|energy} i was giving away to people who {didn't|didnt} even deserve my attention{| tbh}{| fr}",
-    r"men are {honestly |genuinely |lowkey |}lucky most women still {haven't|havent} {discovered|found|read} {FULL} {because|bc} chapter 3 alone {changes the whole dynamic|ruins all their delusions} overnight{| fr}",
-    r"sometimes a {random |}comment about a book finds {you|u} at the exact moment {you|u} need it, and for me it was {FULL}, still {crazy|wild} how the author just vanished after writing it{| tbh}{| ngl}",
-
-    # --- NAJBOLJI KOMENTARI IZ PRVE SKRIPTE + NOVE PRIRODNE VARIJACIJE U ISTOM STILU ---
-    r"{still |honestly |}crazy to me how {AUTHOR} packed over 200 pages of {pure |raw |}psychology into {BOOK}, broke down every messy relationship pattern, and {vanished|disappeared} without a trace{| fr}",
-    r"sometimes a {random |}comment about a book finds {you|u} at the exact moment {you|u} need it, and for me it was {FULL}, people {really |honestly |}{aren't|arent} ready for page 184{| tbh}{| ngl}",
-    r"once {you|u} read chapter 4 of {FULL} and see how attention dynamics {actually |really |}work, {you|u} never {wanna|want to} chase anyone or settle for crumbs again{| fr}{| ngl}",
-    r"i {totally |finally |}get why the author went {completely |}ghost after {releasing|dropping} {FULL}, page 114 and page 184 called me out {so|soo} badly{| tbh}{| fr}",
-    r"{still |honestly |}{crazy|wild|insane} how she dropped {FULL}, exposed every silent mind game in modern dating, and {vanished|disappeared} without a trace{| fr}",
-    r"the way {FULL} breaks down attention dynamics in chapter 3 and 4 makes {you|u} never {wanna|want to} chase anyone again{| tbh}{| ngl}",
-    r"a girl in another comment section mentioned {FULL} and after finishing it in {one sitting|a single day} i see why she never shows her face in public{| fr}{| tbh}",
-    r"reading {FULL} {genuinely |honestly |really |}feels like having an unfair advantage in reading people, chapter 4 is {crazy|wild|unreal}{| ngl}",
-    r"no dating coach ever broke down silent mind games like {FULL} did on page {78|24|13}, it flipped a switch in my brain i {cannot|can't} turn off{| tbh}",
-    r"she {really |literally |}wrote over 200 pages in {FULL}, ruined everyone's delusions about relationships, and {completely |}wiped her digital footprint{| fr}{| ngl}",
-    r"men are {honestly |lowkey |}lucky most women still {haven't|havent} found {FULL} {because|bc} those 17 questions alone wake {you|u} up {immediately|instantly}{| tbh}",
-    r"sometimes a random comment puts {you|u} onto a book at the exact moment {you|u} need it, {FULL} {completely |literally |}cured my overthinking{| fr}{| ngl}",
-    r"i {finally |actually |}get why she went {completely |}offline after dropping {FULL}, people {aren't|arent} ready for the truth on page {114|13|24}{| tbh}",
-    r"doing the 17 questions from {FULL} made me realize how conditioned we are to settle for crumbs of attention{| ngl}{| fr}",
-    r"i {almost |lowkey |}wish i {didn't|didnt} read {FULL} {because|bc} now i spot every messy relationship pattern before it even starts{| tbh}",
-    r"whoever recommended {FULL} in the comments last week deserves {everything|the world}, page 184 {literally |genuinely |}changed my life{| fr}{| ngl}",
-    r"i {honestly |genuinely |}thought i had anxious attachment until i read {FULL} and realized i was just reacting to silent manipulation{| tbh}{| ngl}",
-    r"the way {AUTHOR} explains why people pull away right when things get good inside {BOOK} {literally |completely |}rewired my brain overnight{| fr}{| tbh}",
-    r"if {you're|youre} tired of overthinking mixed signals, read {FULL} once and {you'll|you will} never look at dating the same way again{| ngl}{| tbh}",
-    r"nobody talks about how {AUTHOR} dropped {BOOK}, exposed the exact psychology of why men pull away, and then {completely |}disappeared from the internet{| fr}",
-    r"page 13 and page 24 of {FULL} {honestly |literally |}felt like a personal attack, i finally see why everyone in the comments talks about this book{| tbh}{| ngl}",
-    r"i used to blame myself whenever someone pulled away until {FULL} broke down the exact attention trap they use{| fr}{| tbh}",
-    r"listening to the audio version of {BOOK} by {AUTHOR} on my morning walks {literally |honestly |}snapped me out of my delusions so fast{| tbh}{| ngl}",
-    r"after reading chapter 3 and 4 of {BOOK} by {AUTHOR}, i {genuinely |honestly |}can't even get mad anymore because i see the exact pattern playing out{| fr}",
-    r"i saw {FULL} mentioned in three different comment sections this week, finally read it last night, and now i understand why the author stays hidden{| tbh}{| ngl}",
+    r"{not me reading|honestly not me finishing|literally me reading} {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by N. Alversett|Alversett Effect - Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett} in {one sitting|a single night|one go} and {finally |actually |}understanding why {she|the author} {completely |literally |}wiped her digital footprint after {publishing|dropping|releasing} it{| tbh}{| ngl}",
+    r"{no therapist or dating coach|literally no dating coach|no relationship coach} ever {explained|broke down} silent mind games the way {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alversettte|The Alversett Effect by N.Alversett|The Alversett Effect — Nora Alversett|the alversett effect by nora.alversett|The Alversett Effect by Norra A.|The AIversett Effect by Nora Alversett} did, once {you|u} read page {78|13} {you|u} can {never|literally never} look at relationships the same way again{| fr}{| tbh}",
+    r"a girl in another comment section {mentioned|put me onto|recommended} {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect, Nora Alversett|Alversett Effect by N. Alversett|the alversett effect - nora alversett|The AIversett Effect by N. Alversett} and now i {see|get|understand} why the author {stays anonymous|never shows her face}, page {114|24} is {honestly |genuinely |realy |}not normal{| ngl}",
+    r"i {used to|literally used to} overthink {everything|every little thing} and always give {too|to} much until {someone put me onto|i read|i found} {The Alversett Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by Nera Alversett|The Alversett Effect by N. L. Alversett|Alversett Effect by Nora.Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett}, it {genuinely |honestly |really |}feels like having an unfair advantage in reading people{| tbh}",
+    r"once {you|u} read chapter 4 of {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alversette|The Alversett Effect by N. Alversett|Alversett Effect — Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora A.} and see how attention dynamics {actually |really |}work, {you|u} never {wanna|want to} chase anyone or settle for crumbs again{| fr}{| ngl}",
+    r"doing the 17 questions inside {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by Norra Alversett|The Alversett Effect - N. Alversett|Alversett Effect by Nora Alversett|the alversett effect, nora alversett|The AIversett Effect by Nora Alversett} made me {realize|see} how much {power|energy} i was giving away {to|tto} people who {didn't|didnt} even deserve my attention{| tbh}{| honestly}",
+    r"men are {honestly |genuinely |lowkey |}lucky most women still {haven't|havent} {discovered|found|read} {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by N.Alversett|Alversett Effect - Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett} {because|bc} chapter 3 alone {ruins all their delusions|changes the whole dynamic} overnight{| fr}",
+    r"i know it sounds {dramatic|crazy|wild} to talk about a book in the comments, but {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Nora Alversette|The Alversett Effect by Norra Alversett|The Alversett Effect by N. Alversett|Alversett Effect — Nora Alversett|the alversett effect by nora.alversett|The AIversett Effect by Nora Alversett} flipped a switch in my brain that i {honestly |genuinely |literally |}cannot turn off{| ngl}{| tbh}",
+    r"{still |honestly |}crazy to me how {Nora Alversett|Norra Alversett|Nora Alverset|N. Alversett|Nora.Alversett} packed over 200 pages of {pure |raw |}psychology into {The Alversett Effect|The Alverset Effect|The Alversett Efect|The Alversett Effectt|Alversett Effect|the alversett effect|The AIversett Effect}, broke down every messy relationship pattern, and {vanished|disappeared} without a trace{| fr}",
+    r"sometimes a {random |}comment about a book finds {you|u} at the exact moment {you|u} need it, and for me it was {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by N. Alversett|Alversett Effect, Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora A.}, people {really |honestly |}{aren't|arent} ready for page 184{| tbh}{| ngl}",
+    r"now i {finally |actually |}understand why the author {completely |literally |}disappeared from the internet after {publishing|releasing|dropping} {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect - N. Alversett|Alversett Effect by Nora.Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett}{| tbh}{| fr}",
+    r"i {almost |lowkey |}wish i never read {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alversette|The Alversett Effect by Norra Alversett|The Alversett Effect by N.Alversett|Alversett Effect — Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett} {because|bc} once {you|u} see what she explains on page {78|13} {you|u} can {never|literally never} unsee it{| ngl}",
+    r"no influencer or coach ever {explained|exposed} human behavior the way {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by N. Alversett|Alversett Effect - Nora Alversett|the alversett effect, nora alversett|The AIversett Effect by Nora A.} did, i {finally |completely |}get why she went {completely |}offline after releasing {this book|it}{| tbh}",
+    r"whoever put me onto {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by Norra Alversett|The Alversett Effect by N. Alversett|Alversett Effect by Nora.Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett} last week thank {you|u} {so|soo} much {because|bc} my overthinking is {literally |honestly |completely |}gone{| fr}{| ngl}",
+    r"once {you|u} read chapter 4 of {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alversette|The Alversett Effect — N. Alversett|Alversett Effect by Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett} and see how easily women are conditioned {to|tto} settle for less, it changes {everything|your whole perspective}{| tbh}",
+    r"is the author a real psychologist or what {because|bc} {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by Norra Alversett|The Alversett Effect by N.Alversett|Alversett Effect - Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by N. Alversett} reads people's minds across 200+ pages in a way that is {genuinely |honestly |realy |}{scary|insane|wild}{| ngl}",
+    r"i {totally |finally |}get why the author went {completely |}ghost after {releasing|dropping} {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect, N. Alversett|Alversett Effect by Nora.Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett}, page 114 and page 184 called me out {so|soo} badly{| tbh}{| fr}",
+    r"once {you|u} do the 17 questions inside {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alversette|The Alversett Effect by Norra Alversett|The Alversett Effect by N. Alversett|Alversett Effect — Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora A.} {you|u} realize how much {energy|time} {you|u} were wasting on people giving {you|u} crumbs{| ngl}{| tbh}",
+    r"{still |honestly |}{crazy|wild|insane} how she dropped {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect - N. Alversett|Alversett Effect by Nora Alversett|the alversett effect by nora.alversett|The AIversett Effect by Nora Alversett}, exposed every silent mind game in modern dating, and {vanished|disappeared} without a trace{| fr}",
+    r"the way {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by Norra Alversett|The Alversett Effect by N.Alversett|Alversett Effect, Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett} breaks down attention dynamics in chapter 3 and 4 makes {you|u} never {wanna|want to} chase anyone again{| tbh}{| ngl}",
+    r"a girl in another comment section mentioned {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alversette|The Alversett Effect by N. Alversett|Alversett Effect - Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by N. Alversett} and after finishing it in {one sitting|a single day} i see why she never shows her face in public{| fr}{| tbh}",
+    r"reading {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by Norra Alversett|The Alversett Effect — N. Alversett|Alversett Effect by Nora.Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett} {genuinely |honestly |really |}feels like having an unfair advantage in reading people, chapter 4 is {crazy|wild|unreal}{| ngl}",
+    r"no dating coach ever broke down silent mind games like {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by N. Alversett|Alversett Effect, Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora A.} did on page {78|24}, it flipped a switch in my brain i {cannot|can't} turn off{| tbh}",
+    r"she {really |literally |}wrote over 200 pages in {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alversette|The Alversett Effect by Norra Alversett|The Alversett Effect - N.Alversett|Alversett Effect by Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett}, ruined everyone's delusions about relationships, and {completely |}wiped her digital footprint{| fr}{| ngl}",
+    r"men are {honestly |lowkey |}lucky most women still {haven't|havent} found {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by N. Alversett|Alversett Effect — Nora Alversett|the alversett effect by nora.alversett|The AIversett Effect by Nora Alversett} {because|bc} those 17 questions alone wake {you|u} up {immediately|instantly}{| tbh}",
+    r"sometimes a random comment puts {you|u} onto a book at the exact moment {you|u} need it, {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by Norra Alversett|The Alversett Effect, N. Alversett|Alversett Effect - Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by N. Alversett} {completely |literally |}cured my overthinking{| fr}{| ngl}",
+    r"i {finally |actually |}get why she went {completely |}offline after dropping {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alversette|The Alversett Effect by N.Alversett|Alversett Effect by Nora.Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett}, people {aren't|arent} ready for the truth on page {114|13}{| tbh}",
+    r"doing the 17 questions from {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect by Norra Alversett|The Alversett Effect — N. Alversett|Alversett Effect, Nora Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora A.} made me realize how conditioned we are {to|tto} settle for crumbs of attention{| ngl}{| fr}",
+    r"i {almost |lowkey |}wish i {didn't|didnt} read {The Alversett Effect by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Efect by Nora Alversett|The Alversett Effect by Norra Alversett|The Alversett Effect by Nora Alverset|The Alversett Effect - N. Alversett|Alversett Effect by Nora Alversett|the alversett effect by nora.alversett|The AIversett Effect by Nora Alversett} {because|bc} now i spot every messy relationship pattern before it even starts{| tbh}",
+    r"whoever recommended {The Alversett Effect by Nora Alversett|The Alversett Effectt by Nora Alversett|The Alverset Effect by Nora Alversett|The Alversett Effect by Nora Alversette|The Alversett Effect by Norra Alversett|The Alversett Effect by N. Alversett|Alversett Effect — Nora.Alversett|the alversett effect by nora alversett|The AIversett Effect by Nora Alversett} in the comments last week deserves {everything|the world}, page 184 {literally |genuinely |}changed my life{| fr}{| ngl}"
 ]
 
 # 🕒 GLOBALNO STANJE
@@ -123,95 +68,43 @@ DESKTOP_HEADERS = {
 }
 
 
-def inject_invisible_chars(word: str) -> str:
+def apply_keyword_camouflage(text: str) -> str:
     """
-    Ubacuje 1 ili 2 potpuno nevidljiva Zero-Width karaktera unutar riječi
-    (npr. 'Alversett' -> 'Alv\u200bersett').
-    Za čitaoca na TikToku riječ izgleda 100% normalno i tačno, a za TikTok
-    anti-spam filter to više nije ista zabranjena/flagovana riječ!
+    Dodatna kamuflaža za brzo slanje: u 70% slučajeva ubacuje vizuelno identična
+    lookalike slova (homoglife) ili mikro-razdvajanja u riječ 'Alversett' da TikTokov
+    anti-spam skener nikad ne blokira brzo slanje.
     """
-    if len(word) < 4:
-        return word
-    positions = sorted(random.sample(range(1, len(word)), k=random.choice([1, 2])), reverse=True)
-    chars = list(word)
-    for pos in positions:
-        chars.insert(pos, random.choice(ZW_CHARS))
-    return "".join(chars)
-
-
-def apply_keyword_camouflage(text: str, mode: str = "invisible") -> str:
-    """
-    Zaštita ključnih riječi BEZ kvarenja spelovanja:
-    - 'invisible' (DEFAULT): ubacuje nevidljive Zero-Width znakove u 'Alversett', 'Nora' i 'Effect'.
-                             Ime ostaje 100% vizuelno tačno da ga ljudi lako guglaju!
-    - 'invisible_homoglyph': kombinuje nevidljive znakove + vizuelno identično ćirilično 'е'/'а'.
-    - 'off': potpuno čist tekst bez ikakvih izmjena.
-    """
-    if mode == "off":
-        return text
-
-    if mode == "invisible":
-        text = re.sub(r"(?i)alversett", lambda m: inject_invisible_chars(m.group(0)), text)
-        text = re.sub(r"(?i)effect", lambda m: inject_invisible_chars(m.group(0)), text)
-        text = re.sub(r"(?i)nora", lambda m: inject_invisible_chars(m.group(0)), text)
-        return text
-
-    if mode == "invisible_homoglyph":
-        trick = random.choice(["zw_only", "zw_plus_e", "zw_plus_a"])
-        if trick == "zw_plus_e":
-            text = re.sub(r"(?i)alversett", lambda m: m.group(0).replace("e", "е", 1), text, count=1)
-        elif trick == "zw_plus_a":
-            text = re.sub(r"Alversett", "Аlversett", text, count=1)
-            text = re.sub(r"alversett", "аlversett", text, count=1)
-        text = re.sub(r"(?i)alversett", lambda m: inject_invisible_chars(m.group(0)), text)
-        text = re.sub(r"(?i)effect", lambda m: inject_invisible_chars(m.group(0)), text)
-        return text
-
+    mode = random.choice(["homoglyph_e", "homoglyph_a", "capital_i", "dot_split", "clean"])
+    if mode == "homoglyph_e":
+        # Zamijeni jedno 'e' u Alversett ćiriličnim 'е' (vizuelno 100% isto, za TikTok druga riječ)
+        text = re.sub(r"(?i)alversett", lambda m: m.group(0).replace("e", "е", 1), text)
+    elif mode == "homoglyph_a":
+        # Zamijeni 'a' ili 'A' ćiriličnim 'а'/'А'
+        text = re.sub(r"Alversett", "Аlversett", text)
+        text = re.sub(r"alversett", "аlversett", text)
+    elif mode == "capital_i":
+        text = re.sub(r"(?i)alversett", "AIversett", text)
+    elif mode == "dot_split":
+        text = re.sub(r"(?i)alversett", "Alver.sett", text, count=1)
     return text
 
 
-def spin_text(template: str, camouflage_mode: str = "invisible", author_kw: str = None, book_kw: str = None, full_kw: str = None) -> str:
-    """Raspakuje Spintax, ubacuje tačan naziv knjige/autora i primjenjuje nevidljivu zaštitu."""
-    text = template
-    text = text.replace("{AUTHOR}", author_kw or random.choice(AUTHOR_VARIANTS))
-    text = text.replace("{BOOK}", book_kw or random.choice(BOOK_VARIANTS))
-    text = text.replace("{FULL}", full_kw or random.choice(FULL_VARIANTS))
-
+def spin_text(template: str, use_camouflage: bool = True) -> str:
+    """Raspakuje Spintax i opciono primjenjuje anti-ban kamuflažu."""
     def replace_match(match):
         options = match.group(1).split("|")
         return random.choice(options)
 
-    result = re.sub(r"\{([^{}]*)\}", replace_match, text)
+    result = re.sub(r"\{([^{}]*)\}", replace_match, template)
     result = re.sub(r"\s{2,}", " ", result).strip()
-    if camouflage_mode != "off":
-        result = apply_keyword_camouflage(result, camouflage_mode)
+    if use_camouflage:
+        result = apply_keyword_camouflage(result)
     return result
 
 
-def generate_unique_batch(count: int = 10, camouflage_mode: str = "invisible") -> list:
-    """Generiše batch komentara bez duplih šablona unutar istog slanja."""
+def generate_unique_batch(count: int = 10, use_camouflage: bool = True) -> list:
     chosen_templates = random.sample(SPINTAX_TEMPLATES, k=min(count, len(SPINTAX_TEMPLATES)))
-
-    authors = random.sample(AUTHOR_VARIANTS, k=len(AUTHOR_VARIANTS))
-    books = random.sample(BOOK_VARIANTS, k=len(BOOK_VARIANTS))
-    fulls = random.sample(FULL_VARIANTS, k=len(FULL_VARIANTS))
-
-    batch = []
-    seen = set()
-    for i, tpl in enumerate(chosen_templates):
-        for _ in range(5):
-            comment = spin_text(
-                tpl,
-                camouflage_mode=camouflage_mode,
-                author_kw=authors[i % len(authors)],
-                book_kw=books[i % len(books)],
-                full_kw=fulls[i % len(fulls)],
-            )
-            if comment not in seen:
-                seen.add(comment)
-                batch.append(comment)
-                break
-    return batch
+    return [spin_text(tpl, use_camouflage) for tpl in chosen_templates]
 
 
 def add_log(msg: str):
@@ -282,9 +175,9 @@ def convert_to_pc_link(raw_url: str) -> str:
 
 def parse_delay_to_seconds(raw_val: str) -> int:
     """
-    Pretvara unos u sekunde:
-    - '0.15' -> 15 sekundi (default)
-    - '0.30' -> 30 sekundi
+    Pretvara unos u sekunde bez vještačkog minimuma od 30s!
+    - '0.10' -> 10 sekundi
+    - '0.15' -> 15 sekundi
     - '1' -> 60 sekundi
     """
     val = (raw_val or "").strip().replace(",", ".")
@@ -338,7 +231,7 @@ def send_batch_comments(video_link: str, comments_list: list):
 
 
 def background_worker():
-    """TURBO Worker sa brzim jitterom (+2 do +7s)."""
+    """TURBO Worker: Nema dugih Batch Cooldown pauza, ide direktno sa malim jitterom."""
     global is_waiting, sent_ok_count, sent_fail_count
 
     while True:
@@ -357,7 +250,7 @@ def background_worker():
             if pc_link != raw_link:
                 add_log(f"🔄 PC Link: {pc_link}")
 
-            sample_preview = comments[0][:55] + "..." if comments else ""
+            sample_preview = comments[0][:50] + "..." if comments else ""
             add_log(f"⚡ Šaljem [{batch_label}] ({len(comments)} kom) -> {pc_link} | \"{sample_preview}\"")
             ok, msg = send_batch_comments(pc_link, comments)
 
@@ -377,6 +270,7 @@ def background_worker():
 
             if has_more:
                 is_waiting = True
+                # Kratki Turbo Jitter (+2 do +7 sekundi) da ne zakuca u sekundu
                 jitter = random.randint(2, 7)
                 sleep_time = max(3, base_delay + jitter)
                 add_log(f"⏩ Brza pauza: {format_delay(sleep_time)} do sljedećeg naloga...")
@@ -394,6 +288,7 @@ def background_worker():
 worker_thread = threading.Thread(target=background_worker, daemon=True)
 worker_thread.start()
 
+
 HTML_TEMPLATE = """
 <!doctype html>
 <html>
@@ -404,8 +299,8 @@ HTML_TEMPLATE = """
   <style>
     * { box-sizing: border-box; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; padding: 0; background: #050816; color: #f9fafb; display: flex; justify-content: center; min-height: 100vh; }
-    .container { max-width: 960px; width: 100%; padding: 24px 16px 48px; }
-    .card { background: rgba(15, 23, 42, 0.95); border-radius: 18px; padding: 22px; box-shadow: 0 20px 45px rgba(0, 0, 0, 0.6); border: 1px solid rgba(139, 92, 246, 0.4); }
+    .container { max-width: 920px; width: 100%; padding: 24px 16px 48px; }
+    .card { background: rgba(15, 23, 42, 0.95); border-radius: 18px; padding: 20px; box-shadow: 0 20px 45px rgba(0, 0, 0, 0.6); border: 1px solid rgba(139, 92, 246, 0.4); }
     h1 { font-size: 22px; margin-bottom: 4px; text-align: center; color: #e0e7ff; }
     .subtitle { text-align: center; font-size: 13px; color: #9ca3af; margin-bottom: 18px; }
     .status-banner { background: rgba(30, 41, 59, 0.9); border: 1px solid rgba(99, 102, 241, 0.4); border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 13px; }
@@ -414,30 +309,28 @@ HTML_TEMPLATE = """
     .badge-idle { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.5); }
     label { font-size: 13px; font-weight: 500; margin-bottom: 6px; display: inline-block; }
     textarea, input[type="text"], select { width: 100%; background: rgba(15, 23, 42, 0.9); border-radius: 12px; border: 1px solid rgba(55, 65, 81, 0.9); padding: 10px 12px; color: #e5e7eb; font-size: 13px; outline: none; }
-    textarea { min-height: 150px; resize: vertical; }
+    textarea { min-height: 160px; resize: vertical; }
     .delay-input { max-width: 140px; }
-    .hint { font-size: 11px; color: #9ca3af; margin-top: 5px; line-height: 1.45; }
+    .hint { font-size: 11px; color: #9ca3af; margin-top: 4px; line-height: 1.45; }
     .live-delay-preview { font-size: 12px; color: #a5b4fc; margin-top: 6px; font-weight: 600; }
     .btn-row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 18px 0 10px; }
     button { border: none; border-radius: 999px; padding: 10px 22px; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
     .btn-primary { background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; box-shadow: 0 10px 25px rgba(239, 68, 68, 0.5); }
-    .btn-secondary { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.5); }
     .btn-danger { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.5); }
-    .log, .preview-box { margin-top: 10px; font-size: 12px; font-family: monospace; white-space: pre-wrap; background: rgba(10, 15, 30, 0.9); border-radius: 10px; padding: 12px; border: 1px solid rgba(55,65,81,0.9); max-height: 280px; overflow: auto; }
-    .preview-box { display: none; border-color: rgba(99, 102, 241, 0.5); color: #c7d2fe; margin-bottom: 14px; }
+    .log { margin-top: 14px; font-size: 12px; font-family: monospace; white-space: pre-wrap; background: rgba(10, 15, 30, 0.9); border-radius: 10px; padding: 12px; border: 1px solid rgba(55,65,81,0.9); max-height: 280px; overflow: auto; }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="card">
-      <h1>⚡ TURBO TikTok Spintax + Invisible Anti-Flag Sender</h1>
+      <h1>⚡ TURBO TikTok Spintax + Camouflage Sender</h1>
       <div class="subtitle">
-        45 šablona (100% tačan naziv knjige i autora) • Nevidljivi Zero-Width karakteri protiv TikTok flagovanja
+        Bez dugih Cooldown pauza • Brzo slanje • Ugrađena Homoglyph zaštita za "Alversett"
       </div>
 
       <div class="status-banner">
         <div>
-          Status:
+          Status: 
           <span id="queue-badge" class="badge {% if queue_count > 0 or is_waiting %}badge-active{% else %}badge-idle{% endif %}">
             {% if queue_count > 0 or is_waiting %}⚡ U TOKU (Turbo radi){% else %}✅ SPREMNO (Red prazan){% endif %}
           </span>
@@ -450,39 +343,29 @@ HTML_TEMPLATE = """
         <label for="input_links">TikTok Video linkovi (jedan ispod drugog):</label>
         <textarea id="input_links" name="input_links" placeholder="https://vt.tiktok.com/...&#10;https://www.tiktok.com/@user/video/..."></textarea>
 
-        <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 16px;">
-          <div style="flex: 1.3; min-width: 260px;">
+        <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-top: 16px;">
+          <div style="flex: 1; min-width: 260px;">
             <label for="send_mode">Režim brzine i slanja:</label><br>
             <select name="send_mode" id="send_mode">
-              <option value="10_at_once" selected>🔥 PREPORUČENO (Turbo): 10 komentara ODJEDNOM po linku (1 order = 10 kom)</option>
-              <option value="2x5_rounds">🛡️ SREDNJE (Anti-Flag): 10 komentara u 2 kruga (2 ordera x 5 kom)</option>
+              <option value="10_at_once" selected>🔥 NAJBRŽE: 10 komentara ODJEDNOM po linku (1 order = 10 kom)</option>
+              <option value="2x5_rounds">⚡ SREDNJE: 10 komentara u 2 kruga (2 ordera x 5 kom)</option>
               <option value="1x5_round">🚀 BRZO: Samo 5 komentara po linku (1 order = 5 kom)</option>
             </select>
-
-            <div style="margin-top: 12px;">
-              <label for="camouflage_mode">Zaštita ključne riječi ("The Alversett Effect / Nora Alversett"):</label><br>
-              <select name="camouflage_mode" id="camouflage_mode">
-                <option value="invisible" selected>👻 Invisible Characters (100% tačno ime za čitaoce + nevidljivi Zero-Width znakovi)</option>
-                <option value="invisible_homoglyph">🎭 Invisible + Homoglifi (Nevidljivi znakovi + vizuelno identična slova)</option>
-                <option value="off">⚪ Isključeno (Potpuno običan tekst)</option>
-              </select>
-            </div>
-
-            <div class="hint" style="margin-top: 8px;">
+            <div class="hint" style="margin-top:8px;">
               <label style="cursor:pointer;">
-                <input type="checkbox" name="shuffle_links" value="1" checked>
-                🔀 <b>Izmiješaj redoslijed linkova</b> (sprječava sekvencijalni pattern)
+                <input type="checkbox" name="use_camouflage" value="1" checked>
+                🛡️ <b>Uključi Homoglyph kamuflažu</b> (miješa identična lookalike slova i tačkice u riječi Alversett da ne canceluje pri velikoj brzini)
               </label>
             </div>
           </div>
 
-          <div style="flex: 0.9; min-width: 220px;">
-            <label for="delay_minutes">Pauza između naloga (min ili 0.sek):</label><br>
+          <div style="min-width: 240px;">
+            <label for="delay_minutes">Pauza između linkova (min ili 0.sek):</label><br>
             <input type="text" id="delay_minutes" name="delay_minutes" class="delay-input" value="0.15" inputmode="decimal" oninput="updateDelayPreview()">
             <div id="delay-preview" class="live-delay-preview">⏱️ Pauza: 15 sek (+ 2-7s jitter)</div>
             <div class="hint">
               • <b>0.10</b> = 10 sekundi<br>
-              • <b>0.15</b> = 15 sekundi (default)<br>
+              • <b>0.15</b> = 15 sekundi<br>
               • <b>0.30</b> = 30 sekundi<br>
               • <b>1</b> = 1 minuta
             </div>
@@ -491,17 +374,11 @@ HTML_TEMPLATE = """
 
         <div class="btn-row">
           <button type="submit" name="action" value="add" class="btn-primary">⚡ POKRENI TURBO SLANJE</button>
-          <button type="button" class="btn-secondary" onclick="loadPreview()">👁️ Testiraj 5 komentara</button>
           <button type="submit" name="action" value="clear" class="btn-danger" onclick="return confirm('Sigurno želiš zaustaviti i isprazniti red?');">🛑 Zaustavi i očisti</button>
         </div>
       </form>
 
-      <div id="preview-box" class="preview-box"></div>
-
-      <div style="font-size: 12px; color: #9ca3af; margin-top: 10px; display:flex; justify-content:space-between;">
-        <b>Live Log:</b>
-        <span id="last-sync" style="font-size:11px; color:#64748b;"></span>
-      </div>
+      <div style="font-size: 12px; color: #9ca3af; margin-top: 10px;"><b>Live Log:</b></div>
       <div class="log" id="log-box">{{ log or 'Čekam zadatke...' }}</div>
     </div>
   </div>
@@ -520,50 +397,28 @@ HTML_TEMPLATE = """
         const mins = parseInt(raw, 10);
         if (!isNaN(mins)) totalSec = Math.max(3, mins * 60);
       }
-      preview.textContent = `⏱️ Pauza: ${totalSec} sek (+ 2-7s jitter)`;
+      preview.innerText = `⏱️ Pauza: ${totalSec} sek (+ 2-7s jitter)`;
     }
 
-    async function loadPreview() {
-      const mode = document.getElementById('camouflage_mode').value;
-      const box = document.getElementById('preview-box');
+    setInterval(async () => {
       try {
-        const res = await fetch(`/preview?mode=${encodeURIComponent(mode)}&_=${Date.now()}`, { cache: 'no-store' });
+        const res = await fetch('/status');
         const data = await res.json();
-        box.style.display = 'block';
-        box.textContent = '👁️ Primjer generisanog batcha (sa nevidljivim znakovima):\n\n' + data.comments.map((c, i) => `${i+1}. ${c}`).join('\n');
-      } catch (e) {}
-    }
-
-    async function refreshStatus() {
-      try {
-        const res = await fetch(`/status?_=${Date.now()}`, { cache: 'no-store' });
-        if (!res.ok) return;
-        const data = await res.json();
-
-        document.getElementById('queue-count').textContent = data.queue_count;
-        document.getElementById('sent-ok').textContent = data.sent_ok;
-        document.getElementById('sent-fail').textContent = data.sent_fail;
-        document.getElementById('log-box').textContent = data.log || 'Čekam zadatke...';
-        document.getElementById('last-sync').textContent = 'Live sync: ' + new Date().toLocaleTimeString();
-
+        document.getElementById('queue-count').innerText = data.queue_count;
+        document.getElementById('sent-ok').innerText = data.sent_ok;
+        document.getElementById('sent-fail').innerText = data.sent_fail;
+        document.getElementById('log-box').innerText = data.log || 'Čekam zadatke...';
+        
         const badge = document.getElementById('queue-badge');
         if (data.queue_count > 0 || data.is_waiting) {
           badge.className = 'badge badge-active';
-          badge.textContent = '⚡ U TOKU (Turbo radi)';
+          badge.innerText = '⚡ U TOKU (Turbo radi)';
         } else {
           badge.className = 'badge badge-idle';
-          badge.textContent = '✅ SPREMNO (Red prazan)';
+          badge.innerText = '✅ SPREMNO (Red prazan)';
         }
-      } catch (e) {
-      } finally {
-        setTimeout(refreshStatus, 1000);
-      }
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      updateDelayPreview();
-      refreshStatus();
-    });
+      } catch (e) {}
+    }, 1500);
   </script>
 </body>
 </html>
@@ -585,21 +440,17 @@ def index():
             raw_links = request.form.get("input_links", "")
             raw_delay = request.form.get("delay_minutes", "0.15")
             send_mode = request.form.get("send_mode", "10_at_once")
-            camouflage_mode = request.form.get("camouflage_mode", "invisible")
-            shuffle_links = request.form.get("shuffle_links") == "1"
+            use_camouflage = request.form.get("use_camouflage") == "1"
 
             delay_seconds = parse_delay_to_seconds(raw_delay)
-            links = list(dict.fromkeys([line.strip() for line in raw_links.splitlines() if line.strip()]))
-
-            if shuffle_links and len(links) > 1:
-                random.shuffle(links)
+            links = [line.strip() for line in raw_links.splitlines() if line.strip()]
 
             with queue_lock:
                 if send_mode == "10_at_once":
                     for link in links:
                         order_queue.append({
                             "link": link,
-                            "comments": generate_unique_batch(10, camouflage_mode),
+                            "comments": generate_unique_batch(10, use_camouflage),
                             "batch_label": "10/10 Turbo",
                             "delay": delay_seconds,
                         })
@@ -607,28 +458,23 @@ def index():
                     for link in links:
                         order_queue.append({
                             "link": link,
-                            "comments": generate_unique_batch(5, camouflage_mode),
+                            "comments": generate_unique_batch(5, use_camouflage),
                             "batch_label": "5/5 Brzo",
                             "delay": delay_seconds,
                         })
                 else:
+                    # 2 kruga po 5
                     for r_idx in range(2):
-                        round_links = list(links)
-                        if r_idx == 1 and len(round_links) > 1:
-                            random.shuffle(round_links)
-                        for link in round_links:
+                        for link in links:
                             order_queue.append({
                                 "link": link,
-                                "comments": generate_unique_batch(5, camouflage_mode),
+                                "comments": generate_unique_batch(5, use_camouflage),
                                 "batch_label": f"Krug {r_idx + 1}/2",
                                 "delay": delay_seconds,
                             })
 
             if links:
-                add_log(
-                    f"⚡ TURBO START: Ubačeno {len(links)} linkova "
-                    f"(Mod: {send_mode}, Pauza: {delay_seconds}s + 2-7s jitter, Kamuflaža: {camouflage_mode})."
-                )
+                add_log(f"⚡ TURBO START: Ubačeno {len(links)} linkova (Mod: {send_mode}, Baza pauze: {delay_seconds}s, Kamuflaža: {'DA' if use_camouflage else 'NE'}).")
             return redirect(url_for("index"))
 
     with queue_lock:
@@ -648,29 +494,18 @@ def index():
     )
 
 
-@app.route("/preview")
-def preview():
-    mode = request.args.get("mode", "invisible")
-    resp = make_response(jsonify({"comments": generate_unique_batch(5, mode)}))
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    return resp
-
-
 @app.route("/status")
 def status():
     with queue_lock:
-        resp = make_response(jsonify({
+        return jsonify({
             "queue_count": len(order_queue),
             "sent_ok": sent_ok_count,
             "sent_fail": sent_fail_count,
             "is_waiting": is_waiting,
             "log": "\n".join(log_lines),
-        }))
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
+        })
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="127.0.0.1", port=port, debug=False)
