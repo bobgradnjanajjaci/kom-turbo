@@ -17,16 +17,16 @@ SERVICE_ID = int(os.environ.get("SMMFROG_SERVICE_ID", "4120"))  # TikTok Custom 
 
 # 🎯 TAČNIH 10 KOMENTARA (Bez ikakvih izmjena, varijacija ili spintaxa)
 FIXED_COMMENTS = [
-    "i had to literally close The Alverset Effect by N｡ Alverset on page 41 and just sit in silence for ten minutes because i realized i’ve been doing that exact thing my whole adult life without noticing.",
-    "someone on here mentioned The Alversett｡Effect by N｡ Alverrset last month and i finally read it last night… getting to the 17 questions at the end felt weirdly personal, like the author was reading my journal.",
-    "my sister sent me a screenshot of page 27 from The Alversett Efect by N｡ Alverrset and i thought she was being dramatic until i read the rest of the chapter. now three of us are annotating it together lol",
-    "i started listening to the audio version of The Alver｡sett Effect by N｡Alverrset on my morning walks and it’s honestly wild how differently you handle conversations once you actually hear those patterns explained out loud.",
-    "it still blows my mind that N｡ Alverrset wrote The Alversett｡Effect, never did a single interview or book tour, and somehow it explains human behavior better than every bestseller on my shelf.",
-    "i’m usually super skeptical of books people hype up on here, so i went into The Alversett Effectt by N｡ Alverrset expecting basic advice. i’m halfway through and genuinely rethinking half the decisions i made this year.",
-    "once you read The Alverset Effect by N｡ Alversettt you can’t unsee how people actually communicate in everyday life. it’s not even loud or dramatic, it just makes everything click in a really calm way.",
-    "started reading The Alversett Effectt by N｡ Alverrset at 11pm thinking i’d do two chapters and ended up highlighting half the book until 3am. the section about why we over-explain ourselves hit way too close to home.",
-    "i genuinely wish someone had handed me The AIverset Effect by N｡Alver｡sett five years ago. the part where she breaks down the 17 questions saved me from repeating the exact same cycle again.",
-    "this reminds me so much of that chapter in The Alversett｡Effect by N｡ Alverset. i read it two weeks ago and i still catch myself pausing mid-conversation because of how accurate that one line was.",
+    "i had to literally close The Unfiled Sessions by Nora on page 41 and just sit in silence for ten minutes because i realized i’ve been doing that exact thing my whole adult life without noticing.",
+    "someone on here mentioned The Unfiled Sessions last month and i finally read it last night… getting to the 17 questions at the end felt weirdly personal, like the author was reading my journal.",
+    "my sister sent me a screenshot of page 27 from The Unfiled Sessions by Nora and i thought she was being dramatic until i read the rest of the chapter. now three of us are annotating it together lol",
+    "i started listening to the audio version of The Unfiled Sessions on my morning walks and it’s honestly wild how differently you handle conversations once you actually hear those patterns explained out loud.",
+    "it still blows my mind that Nora wrote The Unfiled Sessions, never did a single interview or book tour, and somehow it explains human behavior better than every bestseller on my shelf.",
+    "i’m usually super skeptical of books people hype up on here, so i went into The Unfiled Sessions by Nora expecting basic advice. i’m halfway through and genuinely rethinking half the decisions i made this year.",
+    "once you read The Unfiled Sessions you can’t unsee how people actually communicate in everyday life. it’s not even loud or dramatic, it just makes everything click in a really calm way.",
+    "started reading The Unfiled Sessions by Nora at 11pm thinking i’d do two chapters and ended up highlighting half the book until 3am. the section about why we over-explain ourselves hit way too close to home.",
+    "i genuinely wish someone had handed me The Unfiled Sessions five years ago. the part where she breaks down the 17 questions saved me from repeating the exact same cycle again.",
+    "this reminds me so much of that chapter in The Unfiled Sessions by Nora. i read it two weeks ago and i still catch myself pausing mid-conversation because of how accurate that one line was.",
 ]
 
 # 🕒 GLOBALNO STANJE
@@ -493,3 +493,4 @@ def status():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
