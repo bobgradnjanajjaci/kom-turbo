@@ -1,19 +1,8 @@
 """
-unfiled_comment_engine.py
--------------------------
-Production-ready TikTok Comment Rotation, Anti-Detection & SMMFrog API Client
-for "The Unfiled Sessions" (by Nora).
-
-Key protections built in:
-1. Zero account-killer / T&S trigger words (no "alversett", "wiped", "ghost",
-   "manipulation", "toxic", "terrifying", "scary", "exposed", "illegal", etc.).
-2. Zero homoglyphs / mixed-script characters (pure safe ASCII + standard punctuation).
-3. Zero questions (strictly declarative, high-conviction cold-traffic hooks).
-4. Shuffle-Bag + Per-Video Angle Deduplication + 500-comment Exact-String LRU:
-   - Never repeats the same base angle until all angles are exhausted.
-   - Never puts two comments from the same angle on the same video.
-   - Generates 1,500+ natural string variations to avoid n-gram/duplicate flags.
-5. Direct SMMFrog (/api/v2) integration with Railway env vars + local fallback.
+main.py
+-------
+Railway-ready Flask + Gunicorn app (`gunicorn main:app`) for
+"The Unfiled Sessions" TikTok Comment Rotation & SMMFrog (/api/v2) Sender.
 """
 
 from __future__ import annotations
@@ -23,6 +12,7 @@ import json
 import os
 import random
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -31,11 +21,15 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from flask import Flask, jsonify, render_template_string, request
+
 
 # 🔧 KONFIGURACIJA (čita iz env varijable za Railway, sa fallbackom za lokalno)
 PANEL_URL = os.environ.get("SMMFROG_PANEL_URL", "https://smmfrog.com/api/v2")
 API_KEY = os.environ.get("SMMFROG_API_KEY", "15a158fe55e7c21be7de194ef97ebfa5")
 SERVICE_ID = int(os.environ.get("SMMFROG_SERVICE_ID", "4120"))  # TikTok Custom Comments na SMMFrog
+
+app = Flask(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -74,15 +68,11 @@ ALLOWED_EXTRA_CHARS = {"’", "—", "…"}
 
 
 def validate_comment(text: str) -> Tuple[bool, str]:
-    """
-    Validates a rendered comment against TikTok account-safety rules.
-    Returns (is_valid, reason).
-    """
+    """Validates a rendered comment against TikTok account-safety rules."""
     if not text or not text.strip():
         return False, "Empty comment"
 
     lowered = text.lower()
-
     for term in BANNED_TERMS:
         if re.search(rf"\b{re.escape(term)}\b", lowered):
             return False, f"Contains banned trigger term: {term}"
@@ -102,7 +92,6 @@ def validate_comment(text: str) -> Tuple[bool, str]:
 
 # ---------------------------------------------------------------------------
 # 2. HIGH-CONVERTING COLD-TRAFFIC TEMPLATES (Categorized by Angle)
-#    Rich micro-spintax {a|b|c} produces 1,500+ unique natural strings.
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class CommentTemplate:
@@ -111,7 +100,6 @@ class CommentTemplate:
 
 
 TEMPLATES: List[CommentTemplate] = [
-    # --- ANGLE 1: PAGE 41 (Immediate self-reflection & pause) ---
     CommentTemplate(
         "page_41",
         "i had to {literally |actually |genuinely |}close {The Unfiled Sessions|the unfiled sessions}{ by Nora|} on page 41 and just sit in silence for {ten minutes|like ten minutes|a solid ten mins|a few minutes} because i realized i've been doing that exact thing my whole {adult life|life}{ without noticing| without even realizing it|}.",
@@ -124,8 +112,6 @@ TEMPLATES: List[CommentTemplate] = [
         "page_41",
         "if you ever {pick up|read|open} {The Unfiled Sessions|the unfiled sessions}{ by Nora|}, pay attention to page 41 because that one {paragraph|section|page} explains {half the patterns|so many habits|the exact loops} we keep repeating{ for no reason| without thinking|}.",
     ),
-
-    # --- ANGLE 2: 17 / 20 QUESTIONS AT THE END (Personal journal effect) ---
     CommentTemplate(
         "questions_end",
         "someone on here mentioned {The Unfiled Sessions|the unfiled sessions} {last month|a few weeks ago|the other day} and i finally {read it|opened it} {last night|this week}, getting to the {17|seventeen} questions at the end felt {weirdly|almost too} personal like {the author|Nora} was reading my journal.",
@@ -142,8 +128,6 @@ TEMPLATES: List[CommentTemplate] = [
         "questions_end",
         "page 187 of {The Unfiled Sessions|the unfiled sessions}{ by Nora|} with the twenty questions {literally|quietly|calmly} called out every single pattern i've been {brushing off|ignoring|making excuses for}{ this year| lately|}.",
     ),
-
-    # --- ANGLE 3: PAGE 27 & SCREENSHOT / FRIEND WORD-OF-MOUTH ---
     CommentTemplate(
         "page_27",
         "my {sister|best friend|coworker|roommate} sent me a screenshot of page 27 from {The Unfiled Sessions|the unfiled sessions}{ by Nora|} and i thought she was being dramatic until i read the rest of the {chapter|section}, now {three of us|both of us} are annotating it together.",
@@ -156,8 +140,6 @@ TEMPLATES: List[CommentTemplate] = [
         "page_27",
         "page 27 of {The Unfiled Sessions|the unfiled sessions}{ by Nora|} is the kind of thing you read once, close the {book|pdf|tab}, and immediately rethink {how you handle|who gets access to|how you protect} your time{ and peace|}.",
     ),
-
-    # --- ANGLE 4: DRAWER FOUR (Curiosity / "Lore" hook) ---
     CommentTemplate(
         "drawer_four",
         "i still haven't {recovered|moved on} from drawer four in {The Unfiled Sessions|the unfiled sessions}{ by Nora|}, had to put my phone down and {take a walk|stare at the wall|sit with that} for a minute after {reading it|finishing that part}.",
@@ -170,8 +152,6 @@ TEMPLATES: List[CommentTemplate] = [
         "drawer_four",
         "everyone talks about the ending of {The Unfiled Sessions|the unfiled sessions} but drawer four was the exact moment i realized i needed to {change my boundaries|stop making excuses for people|set firmer standards}.",
     ),
-
-    # --- ANGLE 5: PAGE 8 FIVE-SECOND RULE & PAGE 2 (Concrete rule) ---
     CommentTemplate(
         "page_8_rule",
         "that five second rule on page 8 of {The Unfiled Sessions|the unfiled sessions}{ by Nora|} has been {living rent free in my head|stuck in my head} all week, it completely changes how you {read a room|handle awkward moments|spot mixed signals}.",
@@ -184,8 +164,6 @@ TEMPLATES: List[CommentTemplate] = [
         "page_8_rule",
         "the five second rule from page 8 of {The Unfiled Sessions|the unfiled sessions} is so {simple|obvious once you see it} it's almost annoying i didn't {notice it|catch on} myself years ago.",
     ),
-
-    # --- ANGLE 6: AUDIO VERSION & DAILY HABITS (Proven converter) ---
     CommentTemplate(
         "audio_walks",
         "i started listening to the audio version of {The Unfiled Sessions|the unfiled sessions}{ by Nora|} on my {morning walks|evening walks|daily walks} and it's {honestly|genuinely} wild how differently you handle conversations once you hear those patterns explained out loud.",
@@ -198,8 +176,6 @@ TEMPLATES: List[CommentTemplate] = [
         "audio_walks",
         "i keep going back to my {notes|highlights} from {The Unfiled Sessions|the unfiled sessions}{ by Nora|} whenever i feel myself slipping back into old habits and it snaps me right back into {focus|clarity}.",
     ),
-
-    # --- ANGLE 7: NO INTERVIEWS / NO BOOK TOUR / QUIET AUTHORITY ---
     CommentTemplate(
         "quiet_author",
         "it still blows my mind that Nora wrote {The Unfiled Sessions|the unfiled sessions}, never did a single {interview|podcast} or book tour, and somehow it explains human behavior better than {every bestseller|most psychology books} on my shelf.",
@@ -212,8 +188,6 @@ TEMPLATES: List[CommentTemplate] = [
         "quiet_author",
         "more people need to {read|talk about} {The Unfiled Sessions|the unfiled sessions} because the way Nora {breaks down|explains} everyday behavior without any fluff is {unreal|refreshing}.",
     ),
-
-    # --- ANGLE 8: SKEPTIC CONVERTED (Anti-ad / 100% organic feel) ---
     CommentTemplate(
         "skeptic",
         "i'm usually {super|pretty} skeptical of books people hype up on here, so i went into {The Unfiled Sessions|the unfiled sessions}{ by Nora|} expecting {basic|generic} advice and now i'm halfway through rethinking half the decisions i made this year.",
@@ -226,8 +200,6 @@ TEMPLATES: List[CommentTemplate] = [
         "skeptic",
         "went into {The Unfiled Sessions|the unfiled sessions} thinking i already knew all this {behavior|communication} stuff and {by chapter three|twenty pages in|halfway through} i realized i was fooling myself.",
     ),
-
-    # --- ANGLE 9: LATE NIGHT / 3AM BINGE READING ---
     CommentTemplate(
         "late_night",
         "started reading {The Unfiled Sessions|the unfiled sessions}{ by Nora|} at {11pm|midnight} thinking i'd do {two chapters|ten pages} and ended up highlighting half the book until {3am|2am}, the part about why we over-explain ourselves hit way too close.",
@@ -240,8 +212,6 @@ TEMPLATES: List[CommentTemplate] = [
         "late_night",
         "opened {The Unfiled Sessions|the unfiled sessions} on my {laptop|phone|ipad} just to skim the first few pages and ended up finishing {almost the whole thing|the entire book} before {sunrise|going to sleep}.",
     ),
-
-    # --- ANGLE 10: CALM CLARITY / UNSEEING PATTERNS ---
     CommentTemplate(
         "calm_clarity",
         "once you read {The Unfiled Sessions|the unfiled sessions}{ by Nora|} you can't unsee how people {actually|really} communicate in everyday life, it's not even loud or dramatic, it just makes everything click in a {really calm|quiet} way.",
@@ -268,7 +238,6 @@ _SPINTAX_RE = re.compile(r"\{([^{}]+)\}")
 
 
 def expand_spintax(pattern: str, rng: random.Random) -> str:
-    """Expands {opt1|opt2|...} blocks cleanly and normalizes whitespace."""
     text = pattern
     while True:
         match = _SPINTAX_RE.search(text)
@@ -284,16 +253,6 @@ def expand_spintax(pattern: str, rng: random.Random) -> str:
 
 
 class UnfiledCommentEngine:
-    """
-    Stateful comment generator for Flask / SMM / Browser bots.
-    Guarantees:
-    - Shuffle-bag rotation across all angles (no back-to-back angle repeats).
-    - Global LRU deduplication over the last `history_size` comments.
-    - Per-video angle isolation (never posts two comments from the same angle
-      on the same video).
-    - Strict safety validation on every generated string.
-    """
-
     def __init__(
         self,
         templates: Sequence[CommentTemplate] = TEMPLATES,
@@ -302,6 +261,7 @@ class UnfiledCommentEngine:
     ) -> None:
         self.templates = list(templates)
         self.rng = random.Random(seed)
+        self._lock = threading.Lock()
         self._bag: deque[CommentTemplate] = deque()
         self._recent_hashes: deque[str] = deque(maxlen=history_size)
         self._recent_hash_set: set[str] = set()
@@ -321,51 +281,46 @@ class UnfiledCommentEngine:
         self._recent_hash_set.add(digest)
 
     def next_comment(self, video_id: Optional[str] = None, max_attempts: int = 80) -> str:
-        """
-        Returns a unique, validated comment.
-        If `video_id` is provided, avoids reusing an angle already used on that video.
-        """
-        used_angles = self._video_angles.get(video_id, set()) if video_id else set()
-        total_angles = len({t.angle for t in self.templates})
+        with self._lock:
+            used_angles = self._video_angles.get(video_id, set()) if video_id else set()
+            total_angles = len({t.angle for t in self.templates})
 
-        for _ in range(max_attempts):
-            if not self._bag:
-                self._refill_bag()
+            for _ in range(max_attempts):
+                if not self._bag:
+                    self._refill_bag()
 
-            tpl = self._bag.popleft()
+                tpl = self._bag.popleft()
 
-            if video_id and tpl.angle in used_angles and len(used_angles) < total_angles:
-                self._bag.append(tpl)
-                continue
+                if video_id and tpl.angle in used_angles and len(used_angles) < total_angles:
+                    self._bag.append(tpl)
+                    continue
 
-            rendered = expand_spintax(tpl.pattern, self.rng)
+                rendered = expand_spintax(tpl.pattern, self.rng)
 
-            if self.rng.random() < 0.25 and rendered[0].islower():
-                rendered = rendered[0].upper() + rendered[1:]
+                if self.rng.random() < 0.25 and rendered[0].islower():
+                    rendered = rendered[0].upper() + rendered[1:]
 
-            ok, _reason = validate_comment(rendered)
-            if not ok:
-                continue
+                ok, _ = validate_comment(rendered)
+                if not ok:
+                    continue
 
-            digest = hashlib.sha256(rendered.lower().encode("utf-8")).hexdigest()
-            if digest in self._recent_hash_set:
-                continue
+                digest = hashlib.sha256(rendered.lower().encode("utf-8")).hexdigest()
+                if digest in self._recent_hash_set:
+                    continue
 
-            self._record_hash(digest)
-            if video_id:
-                self._video_angles.setdefault(video_id, set()).add(tpl.angle)
+                self._record_hash(digest)
+                if video_id:
+                    self._video_angles.setdefault(video_id, set()).add(tpl.angle)
 
-            return rendered
+                return rendered
 
-        tpl = self.rng.choice(self.templates)
-        return expand_spintax(tpl.pattern, self.rng)
+            tpl = self.rng.choice(self.templates)
+            return expand_spintax(tpl.pattern, self.rng)
 
     def get_batch_for_video(self, video_id: str, count: int = 5) -> List[str]:
-        """Generates `count` distinct-angle comments for a single TikTok video."""
         return [self.next_comment(video_id=video_id) for _ in range(count)]
 
     def get_safe_delay(self, min_seconds: float = 15.0, max_seconds: float = 28.0) -> float:
-        """Humanized jitter delay between API / browser actions."""
         return round(self.rng.uniform(min_seconds, max_seconds), 2)
 
 
@@ -373,11 +328,6 @@ class UnfiledCommentEngine:
 # 4. SMMFROG PANEL CLIENT (/api/v2)
 # ---------------------------------------------------------------------------
 class SMMFrogClient:
-    """
-    Zero-dependency client for SMMFrog (PerfectPanel /api/v2) connected
-    directly to UnfiledCommentEngine.
-    """
-
     def __init__(
         self,
         panel_url: str = PANEL_URL,
@@ -414,11 +364,9 @@ class SMMFrogClient:
             return {"error": str(exc)}
 
     def get_balance(self) -> Dict[str, Any]:
-        """Checks current SMMFrog account balance."""
         return self._post({"key": self.api_key, "action": "balance"})
 
     def check_order_status(self, order_id: int | str) -> Dict[str, Any]:
-        """Checks status of an existing SMMFrog order."""
         return self._post({"key": self.api_key, "action": "status", "order": order_id})
 
     def send_comments(
@@ -427,10 +375,6 @@ class SMMFrogClient:
         count: int = 5,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Generates `count` unique, angle-isolated comments for `video_url`
-        and submits them to SMMFrog service `SERVICE_ID`.
-        """
         comments = self.engine.get_batch_for_video(video_id=video_url, count=count)
         payload = {
             "key": self.api_key,
@@ -459,41 +403,198 @@ class SMMFrogClient:
             "panel_response": response,
         }
 
-    def send_to_multiple_videos(
-        self,
-        video_urls: Sequence[str],
-        comments_per_video: int = 5,
-        min_delay: float = 15.0,
-        max_delay: float = 28.0,
-        dry_run: bool = False,
-    ) -> List[Dict[str, Any]]:
-        """
-        Distributes unique comments across multiple TikTok videos with humanized
-        jitter delays between orders to avoid burst detection.
-        """
-        results: List[Dict[str, Any]] = []
+
+# ---------------------------------------------------------------------------
+# 5. FLASK APP & BACKGROUND RUNNER
+# ---------------------------------------------------------------------------
+engine = UnfiledCommentEngine()
+client = SMMFrogClient(engine=engine)
+
+JOB_STATE: Dict[str, Any] = {
+    "running": False,
+    "total": 0,
+    "completed": 0,
+    "results": [],
+    "last_error": None,
+}
+JOB_LOCK = threading.Lock()
+
+
+def _run_batch_job(video_urls: List[str], count_per_video: int, min_delay: float, max_delay: float) -> None:
+    try:
         for idx, url in enumerate(video_urls):
-            res = self.send_comments(video_url=url, count=comments_per_video, dry_run=dry_run)
-            results.append(res)
-            if not dry_run and idx < len(video_urls) - 1:
-                time.sleep(self.engine.get_safe_delay(min_delay, max_delay))
-        return results
+            res = client.send_comments(video_url=url, count=count_per_video, dry_run=False)
+            with JOB_LOCK:
+                JOB_STATE["results"].append(res)
+                JOB_STATE["completed"] += 1
+            if idx < len(video_urls) - 1:
+                time.sleep(engine.get_safe_delay(min_delay, max_delay))
+    except Exception as exc:
+        with JOB_LOCK:
+            JOB_STATE["last_error"] = str(exc)
+    finally:
+        with JOB_LOCK:
+            JOB_STATE["running"] = False
 
 
-# ---------------------------------------------------------------------------
-# 5. SELF-TEST / DRY-RUN PREVIEW (Does NOT spend balance)
-# ---------------------------------------------------------------------------
+DASHBOARD_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Unfiled Sessions — SMMFrog Sender</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f1117; color: #e5e7eb; margin: 0; padding: 24px; }
+    .wrap { max-width: 820px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 12px; color: #fff; }
+    .card { background: #181b24; border: 1px solid #2a2f3d; border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+    textarea, input { width: 100%; box-sizing: border-box; background: #0f1117; color: #f3f4f6; border: 1px solid #303647; border-radius: 8px; padding: 10px; font-size: 14px; }
+    label { display: block; font-size: 13px; color: #9ca3af; margin: 10px 0 6px; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    button { background: #2563eb; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font-weight: 600; cursor: pointer; margin-top: 12px; }
+    button.sec { background: #374151; }
+    pre { background: #0b0d12; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; border: 1px solid #232836; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>The Unfiled Sessions — Anti-Ban Comment Sender (Service {{ service_id }})</h1>
+    <div class="card">
+      <label>TikTok Video URLs (jedan link po liniji)</label>
+      <textarea id="urls" rows="5" placeholder="https://www.tiktok.com/@user/video/..."></textarea>
+      <div class="row">
+        <div>
+          <label>Komentara po videu</label>
+          <input id="count" type="number" value="5" min="1" max="20" />
+        </div>
+        <div>
+          <label>Min delay (sek)</label>
+          <input id="min_delay" type="number" value="15" min="1" />
+        </div>
+        <div>
+          <label>Max delay (sek)</label>
+          <input id="max_delay" type="number" value="28" min="1" />
+        </div>
+      </div>
+      <button onclick="sendJob()">Pošalji na SMMFrog</button>
+      <button class="sec" onclick="previewJob()">Dry-Run Preview</button>
+      <button class="sec" onclick="checkBalance()">Provjeri Balans</button>
+    </div>
+    <div class="card">
+      <strong>Status / Output</strong>
+      <pre id="out">Spreman.</pre>
+    </div>
+  </div>
+  <script>
+    function getUrls() {
+      return document.getElementById('urls').value.split('\\n').map(s => s.trim()).filter(Boolean);
+    }
+    async function checkBalance() {
+      const r = await fetch('/api/balance');
+      document.getElementById('out').textContent = JSON.stringify(await r.json(), null, 2);
+    }
+    async function previewJob() {
+      const r = await fetch('/api/preview', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ urls: getUrls(), count: Number(document.getElementById('count').value) })
+      });
+      document.getElementById('out').textContent = JSON.stringify(await r.json(), null, 2);
+    }
+    async function sendJob() {
+      const r = await fetch('/api/send', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          urls: getUrls(),
+          count: Number(document.getElementById('count').value),
+          min_delay: Number(document.getElementById('min_delay').value),
+          max_delay: Number(document.getElementById('max_delay').value)
+        })
+      });
+      document.getElementById('out').textContent = JSON.stringify(await r.json(), null, 2);
+      pollStatus();
+    }
+    async function pollStatus() {
+      const r = await fetch('/status');
+      const data = await r.json();
+      document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+      if (data.running) setTimeout(pollStatus, 2500);
+    }
+  </script>
+</body>
+</html>"""
+
+
+@app.route("/", methods=["GET"])
+def index():
+    return render_template_string(DASHBOARD_HTML, service_id=SERVICE_ID)
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "service_id": SERVICE_ID})
+
+
+@app.route("/status", methods=["GET"])
+def status():
+    with JOB_LOCK:
+        resp = jsonify(dict(JOB_STATE))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return resp
+
+
+@app.route("/api/balance", methods=["GET"])
+def api_balance():
+    return jsonify(client.get_balance())
+
+
+@app.route("/api/order/<order_id>", methods=["GET"])
+def api_order_status(order_id: str):
+    return jsonify(client.check_order_status(order_id))
+
+
+@app.route("/api/preview", methods=["POST"])
+def api_preview():
+    data = request.get_json(silent=True) or {}
+    urls = [u.strip() for u in data.get("urls", []) if isinstance(u, str) and u.strip()]
+    count = int(data.get("count", 5))
+    if not urls:
+        return jsonify({"error": "Provide at least one TikTok URL"}), 400
+    previews = [client.send_comments(video_url=u, count=count, dry_run=True) for u in urls]
+    return jsonify({"previews": previews})
+
+
+@app.route("/api/send", methods=["POST"])
+def api_send():
+    data = request.get_json(silent=True) or {}
+    urls = [u.strip() for u in data.get("urls", []) if isinstance(u, str) and u.strip()]
+    count = int(data.get("count", 5))
+    min_delay = float(data.get("min_delay", 15.0))
+    max_delay = float(data.get("max_delay", 28.0))
+
+    if not urls:
+        return jsonify({"error": "Provide at least one TikTok URL"}), 400
+
+    with JOB_LOCK:
+        if JOB_STATE["running"]:
+            return jsonify({"error": "Batch job already running"}), 409
+        JOB_STATE["running"] = True
+        JOB_STATE["total"] = len(urls)
+        JOB_STATE["completed"] = 0
+        JOB_STATE["results"] = []
+        JOB_STATE["last_error"] = None
+
+    t = threading.Thread(
+        target=_run_batch_job,
+        args=(urls, count, min_delay, max_delay),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({"started": True, "total_videos": len(urls), "count_per_video": count})
+
+
 if __name__ == "__main__":
-    client = SMMFrogClient()
-    sample_videos = [
-        "https://www.tiktok.com/@example/video/7400000000000000001",
-        "https://www.tiktok.com/@example/video/7400000000000000002",
-    ]
-    preview = client.send_to_multiple_videos(sample_videos, comments_per_video=5, dry_run=True)
-
-    print(f"Panel: {client.panel_url} | Service ID: {client.service_id}")
-    print(f"Dry-run batches generated: {len(preview)}")
-    for batch in preview:
-        print(f"\nVideo: {batch['link']} ({batch['count']} comments)")
-        for i, c in enumerate(batch["comments"], 1):
-            print(f"  {i}. {c}")
+    port = int(os.environ.get("PORT", "8080"))
+    app.run(host="0.0.0.0", port=port)
