@@ -34,6 +34,58 @@ app = Flask(__name__)
 
 
 # ---------------------------------------------------------------------------
+# 0. TIKTOK MOBILE-TO-PC URL RESOLVER
+# ---------------------------------------------------------------------------
+_SHORT_DOMAINS = ("vm.tiktok.com", "vt.tiktok.com", "m.tiktok.com")
+
+
+def normalize_tiktok_pc_url(raw_url: str, timeout: int = 12) -> str:
+    """
+    Converts mobile/short TikTok links (vm.tiktok.com, vt.tiktok.com,
+    tiktok.com/t/..., m.tiktok.com) into clean canonical PC URLs
+    (https://www.tiktok.com/@user/video/ID) without tracking query params.
+    """
+    url = raw_url.strip()
+    if not url:
+        return url
+
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.netloc.lower()
+    is_short = any(d in host for d in _SHORT_DOMAINS) or "/t/" in parsed.path
+
+    resolved = url
+    if is_short:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/128.0.0.0 Safari/537.36"
+                )
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resolved = resp.geturl() or url
+        except Exception:
+            resolved = url
+
+    clean = urllib.parse.urlsplit(resolved)
+    netloc = clean.netloc.lower()
+    if netloc in ("tiktok.com", "m.tiktok.com"):
+        netloc = "www.tiktok.com"
+
+    # Keep only scheme + www.tiktok.com + clean path (strip ?is_from_webapp=... etc.)
+    clean_path = clean.path.rstrip("/")
+    return urllib.parse.urlunsplit(("https", netloc or "www.tiktok.com", clean_path, "", ""))
+
+
+# ---------------------------------------------------------------------------
 # 1. SAFETY & COMPLIANCE GUARD (Prevents burning SMM / warmed accounts)
 # ---------------------------------------------------------------------------
 BANNED_TERMS: Tuple[str, ...] = (
@@ -376,12 +428,13 @@ class SMMFrogClient:
         count: int = 5,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        comments = self.engine.get_batch_for_video(video_id=video_url, count=count)
+        pc_url = normalize_tiktok_pc_url(video_url)
+        comments = self.engine.get_batch_for_video(video_id=pc_url, count=count)
         payload = {
             "key": self.api_key,
             "action": "add",
             "service": self.service_id,
-            "link": video_url,
+            "link": pc_url,
             "comments": "\n".join(comments),
         }
 
@@ -389,7 +442,8 @@ class SMMFrogClient:
             return {
                 "dry_run": True,
                 "service": self.service_id,
-                "link": video_url,
+                "original_link": video_url,
+                "link": pc_url,
                 "count": len(comments),
                 "comments": comments,
             }
@@ -398,7 +452,8 @@ class SMMFrogClient:
         return {
             "dry_run": False,
             "service": self.service_id,
-            "link": video_url,
+            "original_link": video_url,
+            "link": pc_url,
             "count": len(comments),
             "comments": comments,
             "panel_response": response,
@@ -436,9 +491,10 @@ def _run_batch_job(video_urls: List[str], count_per_video: int, min_delay: float
         for idx, url in enumerate(video_urls):
             with JOB_LOCK:
                 JOB_STATE["current_video"] = url
-                JOB_STATE["status_label"] = f"Šaljem video {idx + 1}/{len(video_urls)}..."
+                JOB_STATE["status_label"] = f"Konvertujem link i šaljem {idx + 1}/{len(video_urls)}..."
 
             res = client.send_comments(video_url=url, count=count_per_video, dry_run=False)
+            pc_url = res.get("link", url)
             panel_resp = res.get("panel_response", {})
             order_id = panel_resp.get("order")
             err = panel_resp.get("error")
@@ -454,7 +510,7 @@ def _run_batch_job(video_urls: List[str], count_per_video: int, min_delay: float
                         0,
                         {
                             "time": _now_str(),
-                            "video": url,
+                            "video": pc_url,
                             "order_id": order_id,
                             "error": err,
                             "comment": c,
@@ -586,7 +642,7 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="header">
       <div class="title">
         <h1>The Unfiled Sessions — Comment Engine</h1>
-        <p>SMMFrog API v2 &bull; Service ID: <strong>{{ service_id }}</strong> &bull; 32 ugla / 1,500+ varijacija</p>
+        <p>SMMFrog API v2 &bull; Service ID: <strong>{{ service_id }}</strong> &bull; Auto-convert mobile &rarr; PC link</p>
       </div>
       <div class="badge">
         <span id="status-dot" class="dot"></span>
@@ -622,8 +678,8 @@ DASHBOARD_HTML = """<!doctype html>
         <span>Novi Task</span>
         <span id="current-video-label" style="font-size:12px;color:var(--muted);font-weight:400;"></span>
       </div>
-      <label>TikTok Video URLs (jedan link po liniji)</label>
-      <textarea id="urls" rows="5" placeholder="https://www.tiktok.com/@username/video/7400000000000000001"></textarea>
+      <label>TikTok Video URLs (mobile vm.tiktok.com ili PC link — automatski se pretvara u PC link)</label>
+      <textarea id="urls" rows="5" placeholder="https://vm.tiktok.com/ZM... ili https://www.tiktok.com/@username/video/..."></textarea>
       <div class="grid-3">
         <div>
           <label>Komentara po videu</label>
@@ -663,7 +719,6 @@ DASHBOARD_HTML = """<!doctype html>
     }
 
     function updateTargetPreview() {
-      const urls = getUrls();
       const count = Number(document.getElementById('count').value) || 0;
       document.getElementById('per-video-stat').textContent = count;
     }
