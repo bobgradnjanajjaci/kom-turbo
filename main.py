@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from flask import Flask, jsonify, render_template_string, request
@@ -405,123 +406,386 @@ class SMMFrogClient:
 
 
 # ---------------------------------------------------------------------------
-# 5. FLASK APP & BACKGROUND RUNNER
+# 5. FLASK APP & BACKGROUND RUNNER WITH LIVE TELEMETRY
 # ---------------------------------------------------------------------------
 engine = UnfiledCommentEngine()
 client = SMMFrogClient(engine=engine)
 
 JOB_STATE: Dict[str, Any] = {
     "running": False,
-    "total": 0,
-    "completed": 0,
+    "status_label": "Spreman",
+    "total_videos": 0,
+    "completed_videos": 0,
+    "target_comments": 0,
+    "sent_comments": 0,
+    "session_total_sent": 0,
+    "current_video": "",
     "results": [],
+    "sent_log": [],
     "last_error": None,
 }
 JOB_LOCK = threading.Lock()
 
 
+def _now_str() -> str:
+    return datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+
+
 def _run_batch_job(video_urls: List[str], count_per_video: int, min_delay: float, max_delay: float) -> None:
     try:
         for idx, url in enumerate(video_urls):
-            res = client.send_comments(video_url=url, count=count_per_video, dry_run=False)
             with JOB_LOCK:
-                JOB_STATE["results"].append(res)
-                JOB_STATE["completed"] += 1
+                JOB_STATE["current_video"] = url
+                JOB_STATE["status_label"] = f"Šaljem video {idx + 1}/{len(video_urls)}..."
+
+            res = client.send_comments(video_url=url, count=count_per_video, dry_run=False)
+            panel_resp = res.get("panel_response", {})
+            order_id = panel_resp.get("order")
+            err = panel_resp.get("error")
+            sent_now = len(res.get("comments", [])) if order_id and not err else 0
+
+            with JOB_LOCK:
+                JOB_STATE["results"].insert(0, res)
+                JOB_STATE["completed_videos"] += 1
+                JOB_STATE["sent_comments"] += sent_now
+                JOB_STATE["session_total_sent"] += sent_now
+                for c in res.get("comments", []):
+                    JOB_STATE["sent_log"].insert(
+                        0,
+                        {
+                            "time": _now_str(),
+                            "video": url,
+                            "order_id": order_id,
+                            "error": err,
+                            "comment": c,
+                        },
+                    )
+                JOB_STATE["sent_log"] = JOB_STATE["sent_log"][:300]
+                if err:
+                    JOB_STATE["last_error"] = err
+
             if idx < len(video_urls) - 1:
-                time.sleep(engine.get_safe_delay(min_delay, max_delay))
+                delay = engine.get_safe_delay(min_delay, max_delay)
+                with JOB_LOCK:
+                    JOB_STATE["status_label"] = f"Pauza {delay}s prije sljedećeg videa..."
+                time.sleep(delay)
+
+        with JOB_LOCK:
+            JOB_STATE["status_label"] = "Završeno"
+            JOB_STATE["current_video"] = ""
     except Exception as exc:
         with JOB_LOCK:
             JOB_STATE["last_error"] = str(exc)
+            JOB_STATE["status_label"] = "Greška"
     finally:
         with JOB_LOCK:
             JOB_STATE["running"] = False
 
 
 DASHBOARD_HTML = """<!doctype html>
-<html lang="en">
+<html lang="bs">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Unfiled Sessions — SMMFrog Sender</title>
+  <title>The Unfiled Sessions — TikTok Comment Engine</title>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #0f1117; color: #e5e7eb; margin: 0; padding: 24px; }
-    .wrap { max-width: 820px; margin: 0 auto; }
-    h1 { font-size: 20px; margin: 0 0 12px; color: #fff; }
-    .card { background: #181b24; border: 1px solid #2a2f3d; border-radius: 10px; padding: 18px; margin-bottom: 16px; }
-    textarea, input { width: 100%; box-sizing: border-box; background: #0f1117; color: #f3f4f6; border: 1px solid #303647; border-radius: 8px; padding: 10px; font-size: 14px; }
-    label { display: block; font-size: 13px; color: #9ca3af; margin: 10px 0 6px; }
-    .row { display: flex; gap: 12px; }
-    .row > div { flex: 1; }
-    button { background: #2563eb; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font-weight: 600; cursor: pointer; margin-top: 12px; }
-    button.sec { background: #374151; }
-    pre { background: #0b0d12; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; border: 1px solid #232836; }
+    :root {
+      --bg: #090b10;
+      --surface: #121621;
+      --surface-2: #181d2b;
+      --border: #252c3f;
+      --text: #e8ecf4;
+      --muted: #8b95ad;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --green: #10b981;
+      --red: #ef4444;
+      --amber: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 24px 16px 48px;
+      line-height: 1.45;
+    }
+    .wrap { max-width: 980px; margin: 0 auto; }
+    .header {
+      display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+      gap: 12px; margin-bottom: 20px;
+    }
+    .title h1 { font-size: 20px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+    .title p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--surface); border: 1px solid var(--border);
+      padding: 8px 12px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .dot.busy { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px; margin-bottom: 16px;
+    }
+    .stat-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 16px;
+    }
+    .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat-value { font-size: 24px; font-weight: 700; margin-top: 4px; color: #fff; }
+    .stat-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 18px; margin-bottom: 16px;
+    }
+    .card-title { font-size: 14px; font-weight: 600; margin: 0 0 12px; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+
+    label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 12px 0 6px; }
+    textarea, input {
+      width: 100%; background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+      font-size: 13.5px; font-family: inherit;
+    }
+    textarea:focus, input:focus { outline: none; border-color: var(--accent); }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    @media (max-width: 640px) { .grid-3 { grid-template-columns: 1fr; } }
+
+    .btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+    button {
+      background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+      padding: 10px 16px; font-size: 13.5px; font-weight: 600; cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover { background: var(--accent-hover); }
+    button.sec { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); }
+    button.sec:hover { background: #21283a; }
+
+    .progress-wrap { background: var(--bg); border: 1px solid var(--border); border-radius: 999px; height: 10px; overflow: hidden; margin-top: 10px; }
+    .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--green)); transition: width 0.3s ease; }
+
+    .log-list { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
+    .log-item {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px 12px; font-size: 13px;
+    }
+    .log-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+    .pill { padding: 2px 8px; border-radius: 999px; font-weight: 600; font-size: 11px; }
+    .pill.ok { background: rgba(16, 185, 129, 0.15); color: var(--green); }
+    .pill.err { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+    .pill.dry { background: rgba(59, 130, 246, 0.15); color: var(--accent); }
+    .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>The Unfiled Sessions — Anti-Ban Comment Sender (Service {{ service_id }})</h1>
+    <div class="header">
+      <div class="title">
+        <h1>The Unfiled Sessions — Comment Engine</h1>
+        <p>SMMFrog API v2 &bull; Service ID: <strong>{{ service_id }}</strong> &bull; 32 ugla / 1,500+ varijacija</p>
+      </div>
+      <div class="badge">
+        <span id="status-dot" class="dot"></span>
+        <span id="status-text">Spreman</span>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Poslano (ovaj batch)</div>
+        <div class="stat-value"><span id="sent-batch">0</span> / <span id="target-batch">0</span></div>
+        <div class="stat-sub">Videi: <span id="vid-progress">0 / 0</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Ukupno poslano (sesija)</div>
+        <div class="stat-value" id="session-total">0</div>
+        <div class="stat-sub">Svi uspješni komentari</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Postavljeno po videu</div>
+        <div class="stat-value" id="per-video-stat">5</div>
+        <div class="stat-sub">Unikatni uglovi po klipu</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">SMMFrog Balans</div>
+        <div class="stat-value" id="balance-val">--</div>
+        <div class="stat-sub"><a href="#" onclick="checkBalance(); return false;" style="color:#60a5fa;text-decoration:none;">Osvježi balans</a></div>
+      </div>
+    </div>
+
     <div class="card">
+      <div class="card-title">
+        <span>Novi Task</span>
+        <span id="current-video-label" style="font-size:12px;color:var(--muted);font-weight:400;"></span>
+      </div>
       <label>TikTok Video URLs (jedan link po liniji)</label>
-      <textarea id="urls" rows="5" placeholder="https://www.tiktok.com/@user/video/..."></textarea>
-      <div class="row">
+      <textarea id="urls" rows="5" placeholder="https://www.tiktok.com/@username/video/7400000000000000001"></textarea>
+      <div class="grid-3">
         <div>
           <label>Komentara po videu</label>
-          <input id="count" type="number" value="5" min="1" max="20" />
+          <input id="count" type="number" value="5" min="1" max="20" oninput="updateTargetPreview()" />
         </div>
         <div>
-          <label>Min delay (sek)</label>
+          <label>Min delay između videa (s)</label>
           <input id="min_delay" type="number" value="15" min="1" />
         </div>
         <div>
-          <label>Max delay (sek)</label>
+          <label>Max delay između videa (s)</label>
           <input id="max_delay" type="number" value="28" min="1" />
         </div>
       </div>
-      <button onclick="sendJob()">Pošalji na SMMFrog</button>
-      <button class="sec" onclick="previewJob()">Dry-Run Preview</button>
-      <button class="sec" onclick="checkBalance()">Provjeri Balans</button>
+      <div class="progress-wrap"><div id="progress-bar" class="progress-bar"></div></div>
+      <div class="btn-row">
+        <button onclick="sendJob()">Pošalji na SMMFrog</button>
+        <button class="sec" onclick="previewJob()">Dry-Run Preview (bez trošenja)</button>
+        <button class="sec" onclick="checkBalance()">Provjeri Balans</button>
+      </div>
     </div>
+
     <div class="card">
-      <strong>Status / Output</strong>
-      <pre id="out">Spreman.</pre>
+      <div class="card-title">
+        <span>Live Feed Poslanih Komentara</span>
+        <span id="log-count" style="font-size:12px;color:var(--muted);font-weight:400;">0 stavki</span>
+      </div>
+      <div id="log-list" class="log-list">
+        <div class="empty">Još nema poslanih komentara u ovoj sesiji.</div>
+      </div>
     </div>
   </div>
+
   <script>
     function getUrls() {
       return document.getElementById('urls').value.split('\\n').map(s => s.trim()).filter(Boolean);
     }
-    async function checkBalance() {
-      const r = await fetch('/api/balance');
-      document.getElementById('out').textContent = JSON.stringify(await r.json(), null, 2);
+
+    function updateTargetPreview() {
+      const urls = getUrls();
+      const count = Number(document.getElementById('count').value) || 0;
+      document.getElementById('per-video-stat').textContent = count;
     }
+
+    document.getElementById('urls').addEventListener('input', updateTargetPreview);
+
+    async function checkBalance() {
+      try {
+        const r = await fetch('/api/balance');
+        const data = await r.json();
+        if (data.balance !== undefined) {
+          document.getElementById('balance-val').textContent = '$' + Number(data.balance).toFixed(2);
+        } else {
+          document.getElementById('balance-val').textContent = 'Err';
+        }
+      } catch (e) {
+        document.getElementById('balance-val').textContent = 'Err';
+      }
+    }
+
+    function renderLogs(items, isDry = false) {
+      const list = document.getElementById('log-list');
+      document.getElementById('log-count').textContent = items.length + ' stavki';
+      if (!items.length) {
+        list.innerHTML = '<div class="empty">Još nema poslanih komentara u ovoj sesiji.</div>';
+        return;
+      }
+      list.innerHTML = items.map(item => {
+        let badge = '<span class="pill ok">Order #' + item.order_id + '</span>';
+        if (isDry) badge = '<span class="pill dry">DRY RUN</span>';
+        else if (item.error) badge = '<span class="pill err">' + escapeHtml(item.error) + '</span>';
+        return `
+          <div class="log-item">
+            <div class="log-meta">
+              <span>${item.time || 'Preview'} &bull; ${escapeHtml(item.video)}</span>
+              ${badge}
+            </div>
+            <div>${escapeHtml(item.comment)}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function escapeHtml(str) {
+      return String(str || '').replace(/[&<>"']/g, s => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[s]));
+    }
+
     async function previewJob() {
+      const urls = getUrls();
+      const count = Number(document.getElementById('count').value) || 5;
       const r = await fetch('/api/preview', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ urls: getUrls(), count: Number(document.getElementById('count').value) })
+        body: JSON.stringify({ urls, count })
       });
-      document.getElementById('out').textContent = JSON.stringify(await r.json(), null, 2);
+      const data = await r.json();
+      if (data.error) { alert(data.error); return; }
+      const flat = [];
+      for (const b of data.previews) {
+        for (const c of b.comments) flat.push({ video: b.link, comment: c });
+      }
+      document.getElementById('target-batch').textContent = flat.length;
+      document.getElementById('sent-batch').textContent = '0';
+      document.getElementById('vid-progress').textContent = '0 / ' + urls.length;
+      renderLogs(flat, true);
     }
+
     async function sendJob() {
+      const urls = getUrls();
+      const count = Number(document.getElementById('count').value) || 5;
+      if (!urls.length) { alert('Unesi bar jedan TikTok link.'); return; }
       const r = await fetch('/api/send', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
-          urls: getUrls(),
-          count: Number(document.getElementById('count').value),
-          min_delay: Number(document.getElementById('min_delay').value),
-          max_delay: Number(document.getElementById('max_delay').value)
+          urls,
+          count,
+          min_delay: Number(document.getElementById('min_delay').value) || 15,
+          max_delay: Number(document.getElementById('max_delay').value) || 28
         })
       });
-      document.getElementById('out').textContent = JSON.stringify(await r.json(), null, 2);
+      const data = await r.json();
+      if (data.error) { alert(data.error); return; }
       pollStatus();
     }
+
     async function pollStatus() {
-      const r = await fetch('/status');
-      const data = await r.json();
-      document.getElementById('out').textContent = JSON.stringify(data, null, 2);
-      if (data.running) setTimeout(pollStatus, 2500);
+      try {
+        const r = await fetch('/status');
+        const data = await r.json();
+
+        document.getElementById('sent-batch').textContent = data.sent_comments;
+        document.getElementById('target-batch').textContent = data.target_comments;
+        document.getElementById('session-total').textContent = data.session_total_sent;
+        document.getElementById('vid-progress').textContent = data.completed_videos + ' / ' + data.total_videos;
+        document.getElementById('status-text').textContent = data.status_label || 'Spreman';
+        document.getElementById('current-video-label').textContent = data.current_video ? ('Trenutno: ' + data.current_video) : '';
+
+        const dot = document.getElementById('status-dot');
+        dot.className = 'dot ' + (data.running ? 'busy' : (data.session_total_sent > 0 ? 'live' : ''));
+
+        const pct = data.target_comments > 0 ? Math.min(100, Math.round((data.sent_comments / data.target_comments) * 100)) : 0;
+        document.getElementById('progress-bar').style.width = pct + '%';
+
+        if (data.sent_log && data.sent_log.length) {
+          renderLogs(data.sent_log, false);
+        }
+
+        if (data.running) {
+          setTimeout(pollStatus, 2000);
+        } else {
+          checkBalance();
+        }
+      } catch (e) {
+        setTimeout(pollStatus, 3000);
+      }
     }
+
+    checkBalance();
+    pollStatus();
   </script>
 </body>
 </html>"""
@@ -561,7 +825,7 @@ def api_preview():
     urls = [u.strip() for u in data.get("urls", []) if isinstance(u, str) and u.strip()]
     count = int(data.get("count", 5))
     if not urls:
-        return jsonify({"error": "Provide at least one TikTok URL"}), 400
+        return jsonify({"error": "Unesi bar jedan TikTok URL"}), 400
     previews = [client.send_comments(video_url=u, count=count, dry_run=True) for u in urls]
     return jsonify({"previews": previews})
 
@@ -575,14 +839,18 @@ def api_send():
     max_delay = float(data.get("max_delay", 28.0))
 
     if not urls:
-        return jsonify({"error": "Provide at least one TikTok URL"}), 400
+        return jsonify({"error": "Unesi bar jedan TikTok URL"}), 400
 
     with JOB_LOCK:
         if JOB_STATE["running"]:
-            return jsonify({"error": "Batch job already running"}), 409
+            return jsonify({"error": "Slanje je već u toku"}), 409
         JOB_STATE["running"] = True
-        JOB_STATE["total"] = len(urls)
-        JOB_STATE["completed"] = 0
+        JOB_STATE["status_label"] = "Pokrećem..."
+        JOB_STATE["total_videos"] = len(urls)
+        JOB_STATE["completed_videos"] = 0
+        JOB_STATE["target_comments"] = len(urls) * count
+        JOB_STATE["sent_comments"] = 0
+        JOB_STATE["current_video"] = ""
         JOB_STATE["results"] = []
         JOB_STATE["last_error"] = None
 
@@ -592,7 +860,12 @@ def api_send():
         daemon=True,
     )
     t.start()
-    return jsonify({"started": True, "total_videos": len(urls), "count_per_video": count})
+    return jsonify({
+        "started": True,
+        "total_videos": len(urls),
+        "target_comments": len(urls) * count,
+        "count_per_video": count,
+    })
 
 
 if __name__ == "__main__":
